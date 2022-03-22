@@ -1,0 +1,3605 @@
+---
+title: "DS785"
+author: "Christopher Flach"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r install load}
+#Install/Load
+install.load::install_load("arrow", "bayestestR",
+                           "caret", "choroplethr", "choroplethrMaps", "cluster", "correlation", "corrplot", "corrr", "covidcast",
+                           "DALEX", "data.table", "deSolve", "downloadthis", "EIX", "embed",
+                           "factoextra", "FactoMineR", "farff", "flexdashboard", "forecast", "formattable",
+                           "ggalluvial", "GGally", "ggcharts", "ggcorrplot", "ggExtra", "ggforce", "ggridges", "ggside", "ggstatsplot",
+                           "ggtext", "grid", "gridExtra", "gt", "gtable", "gtsummary",
+                           "heatmaply", "hrbrthemes", "janitor", "latticeExtra", "lubridate", "maptools", "Metrics", "NbClust",
+                           "OpenML", "openxlsx", "outliers",
+                           "plotly", "poliscidata", "prophet", "psych", "randomForest", "ranger", "RcppRoll",
+                           "see", "sf", "SHAPforxgboost", "shapper", "shapr", "shinydashboard", "skimr",
+                           "tabnet", "tidycensus", "tidymodels", "tidyverse", "timetk", "tmap", "tmaptools",
+                           "xgboost", "xlsx", "xts", "zipcodeR", "zoo")
+
+#Color Palette
+my_colors <- c("#d47d7d", "#c4d080", "#a1ced8", "#c9a0c7", "#eceadc")
+plotly_colors <- c("#1F77B4", "#FF7F0E", "#2CA02C", "#D62728", "#9575D2", "#8C564B", "#E377C0", "#7F7F7F", "#BCBD22", "#17BECF")
+
+#Variable Lists
+daily_vars <- vector()
+monthly_vars <- vector()
+annual_vars <- vector()
+
+#No Scientific Formatting
+options(scipen = 999)
+
+#Set Working Directory
+completePath<- rstudioapi::getActiveDocumentContext()$path
+nameOfMyFile <- sub(".*/", "", completePath)
+workingDirectoryPath <- gsub(pattern = nameOfMyFile, replacement = "", x = completePath)
+setwd(workingDirectoryPath)
+
+#State Boundaries
+state_map <- map_data("state")
+```
+
+```{r functions}
+#Policy Measures - https://covid19datahub.io/articles/docs.html
+policy_function <- function(var_ = "school_closing", clean_var = "School Closing", month_ = "August"){
+  final_df %>%
+    dplyr::filter(year(date) == 2021) %>%
+    dplyr::select(fips, date, var_) %>%
+    `colnames<-`(c("fips", "date", "var")) %>%
+    mutate(month = month(date, label = T, abbr = F), var = factor(var, levels = c("0", "1", "-1", "2", "-2", "3", "-3"))) %>%
+    group_by(fips, month) %>%
+    count(var) %>%
+    slice_max(order_by = n, n = 1) %>%
+    ungroup() %>%
+    dplyr::select(-n) %>%
+    inner_join(
+      final_df %>%
+        dplyr::filter(year(date) == 2021) %>%
+        dplyr::select(fips, date, daily_cases, population) %>%
+        mutate(month = month(date, label = T, abbr = F)) %>%
+        group_by(fips, month) %>%
+        summarise(monthly_cases = sum(daily_cases, na.rm = T), population = mean(population)) %>%
+        ungroup() %>%
+        dplyr::mutate(monthly_cases_per_100k = monthly_cases/population*100000) %>%
+        dplyr::select(-monthly_cases, -population)
+    ) %>%
+    dplyr::select(-fips) %>%
+    dplyr::filter(month == month_) %>%
+    dplyr::filter(!monthly_cases_per_100k %in% c(outliers::outlier(monthly_cases_per_100k))) %>%
+    ggbetweenstats(
+      x = var,
+      y = monthly_cases_per_100k,
+      title = paste0("Monthly Cases Per 100k by ", clean_var," Policy for ", month_, " 2021"),
+      caption = "Outliers Removed",
+      ggplot.component = list(theme(axis.title.x = element_blank(), axis.title.y = element_blank()),
+                              scale_y_continuous(labels = scales::comma_format()))
+    )
+}
+
+#Divide by 100
+div100 <- function(x, na.rm = F) (x/100)
+div100_1 <- function(x, na.rm = F) (x/100-1)
+
+#Outlier Detection
+isnt_out_tukey <- function(x, k = 1.5, na.rm = T) {
+  quar <- quantile(x, probs = c(0.25, 0.75), na.rm = na.rm)
+  iqr <- diff(quar)
+  (quar[1] - k * iqr <= x) & (x <= quar[2] + k * iqr)
+}
+```
+
+```{r map data}
+# #US Counties Lat/Long
+# us_counties <- map_data("county") %>%
+#   mutate(subregion = ifelse(subregion == "de kalb", "dekalb", subregion)) %>%
+#   mutate(subregion = ifelse(subregion == "de soto" & region != "louisiana", "desoto", subregion)) %>%
+#   mutate(subregion = ifelse(subregion == "de witt" & region != "illinois", "dewitt", subregion)) %>%
+#   mutate(subregion = ifelse(subregion == "dona ana", "doña ana", subregion)) %>%
+#   mutate(subregion = ifelse(subregion == "du page", "dupage", subregion)) %>%
+#   mutate(subregion = ifelse(subregion == "la porte", "laporte", subregion)) %>%
+#   mutate(subregion = ifelse(subregion == "la salle" & region == "illinois", "lasalle", subregion)) %>%
+#   mutate(subregion = ifelse(subregion == "obrien", "o'brien", subregion)) %>%
+#   mutate(subregion = ifelse(subregion == "la moure", "lamoure", subregion)) %>%
+#   mutate(subregion = ifelse(subregion == "oglala dakota", "oglala lakota", subregion)) %>%
+#   mutate(subregion = ifelse(subregion == "yellowstone national", "yellowstone", subregion)) %>%
+#   mutate(subregion = ifelse(subregion == "doña ana", "dona ana", subregion)) %>%
+#   mutate(subregion = ifelse(region == "district of columbia", "district of columbia", subregion)) %>%
+#   mutate(subregion = gsub("st ", "st. ", subregion)) %>%
+#   mutate(subregion = gsub("west. ", "west ", subregion)) %>%
+#   mutate(subregion = gsub("east. ", "east ", subregion)) %>%
+#   mutate(subregion = gsub("marys", "mary's", subregion)) %>%
+#   mutate(subregion = gsub("georges", "george's", subregion)) %>%
+#   mutate(subregion = gsub("annes", "anne's", subregion)) %>%
+#   mutate(subregion = gsub("ste ", "ste. ", subregion)) %>%
+#   mutate(subregion = ifelse(region == "louisiana", paste0(subregion, " parish"), subregion)) %>%
+#   dplyr::filter(!(region == "virginia" & subregion %in% c("suffolk", "hampton", "newport news", "norfolk", "virginia beach")))
+# 
+# #Progress Bar
+# pb <- progress_bar$new(format = "(:spin) [:bar] :percent [Elapsed time: :elapsedfull || Estimated time remaining: :eta]",
+#                        total = nrow(us_counties),
+#                        complete = "=",   # Completion bar character
+#                        incomplete = "-", # Incomplete bar character
+#                        current = ">",    # Current bar character
+#                        clear = FALSE,    # If TRUE, clears the bar when finish
+#                        width = 100)      # Width of the progress bar
+# for (i in 1:nrow(us_counties)) {
+#   us_counties$fips[i] <- usmap::fips(us_counties$region[i], us_counties$subregion[i])
+#   pb$tick()
+# }
+# 
+# #Write
+# write_parquet(us_counties, "../Data/us_counties.parquet")
+
+#Read
+us_counties <- read_parquet("../Data/us_counties.parquet")
+invisible(gc())
+```
+
+```{r poliscidata}
+#Create df
+polisci_df <- poliscidata::states %>%
+  dplyr::mutate(state = state.name[match(trimws(stateid), state.abb)]) %>%
+  select(-stateid) %>%
+  select_if(~sum(is.na(.)) == 0)
+
+#Add DC using Maryland data
+polisci_df <- polisci_df %>%
+  dplyr::filter(state == "Maryland") %>%
+  dplyr::mutate(state = gsub("Maryland", "District of Columbia", state)) %>%
+  bind_rows(polisci_df)
+
+#Append Variables
+annual_vars <- c(annual_vars, names(polisci_df %>% select(-state)))
+```
+
+```{r google mobility data}
+#Read
+mobility_2021 <- fread("../Data/2021_US_Region_Mobility_Report.csv") %>%
+  select(-country_region_code, -country_region, -metro_area, -iso_3166_2_code, -place_id)
+mobility_2020 <- fread("../Data/2020_US_Region_Mobility_Report.csv") %>%
+  select(-country_region_code, -country_region, -metro_area, -iso_3166_2_code, -place_id)
+
+#Rbind
+mobility_df <- bind_rows(mobility_2021, mobility_2020) %>%
+  dplyr::mutate(state = tolower(sub_region_1),
+                county = tolower(sub_region_2),
+                census_fips_code = str_pad(census_fips_code, 5, "0", side = "left"),
+                retail_and_recreation_percent_change_from_baseline = retail_and_recreation_percent_change_from_baseline/100,
+                grocery_and_pharmacy_percent_change_from_baseline = grocery_and_pharmacy_percent_change_from_baseline/100,
+                parks_percent_change_from_baseline = parks_percent_change_from_baseline/100,
+                transit_stations_percent_change_from_baseline = transit_stations_percent_change_from_baseline/100,
+                workplaces_percent_change_from_baseline = workplaces_percent_change_from_baseline/100,
+                residential_percent_change_from_baseline = residential_percent_change_from_baseline/100) %>%
+  select(-sub_region_1, -sub_region_2)
+
+#Mobility by State
+state_mobility_df <- mobility_df %>%
+  dplyr::filter(state != "" & county == "") %>%
+  select(-census_fips_code, -county) %>%
+  replace(is.na(.), 0)
+
+#Fill missing county values with state values
+mobility_df <- mobility_df %>%
+  left_join(state_mobility_df, by=c("date", "state")) %>%
+  mutate(retail_and_recreation_percent_change_from_baseline = ifelse(is.na(retail_and_recreation_percent_change_from_baseline.x), retail_and_recreation_percent_change_from_baseline.y, retail_and_recreation_percent_change_from_baseline.x),
+         grocery_and_pharmacy_percent_change_from_baseline = ifelse(is.na(grocery_and_pharmacy_percent_change_from_baseline.x), grocery_and_pharmacy_percent_change_from_baseline.y, grocery_and_pharmacy_percent_change_from_baseline.x),
+         parks_percent_change_from_baseline = ifelse(is.na(parks_percent_change_from_baseline.x), parks_percent_change_from_baseline.y, parks_percent_change_from_baseline.x),
+         transit_stations_percent_change_from_baseline = ifelse(is.na(transit_stations_percent_change_from_baseline.x), transit_stations_percent_change_from_baseline.y, transit_stations_percent_change_from_baseline.x),
+         workplaces_percent_change_from_baseline = ifelse(is.na(workplaces_percent_change_from_baseline.x), workplaces_percent_change_from_baseline.y, workplaces_percent_change_from_baseline.x),
+         residential_percent_change_from_baseline = ifelse(is.na(residential_percent_change_from_baseline.x), residential_percent_change_from_baseline.y, residential_percent_change_from_baseline.x)
+  ) %>%
+  select(-contains(c(".x", ".y")), -state, -county) %>%
+  na.omit() %>%
+  dplyr::rename(fips = census_fips_code)
+
+#Write
+#write_parquet(mobility_df, "../Data/mobility_df.parquet")
+
+#Append to Variable List
+daily_vars <- c(daily_vars, names(mobility_df[,3:(length(mobility_df))]))
+
+#Clean up
+rm(mobility_2021, mobility_2020)
+invisible(gc())
+```
+
+```{r acs 2017 data}
+#Read
+acs_2017 <- fread("../Data/acs2017_county_data.csv") %>%
+  mutate(fips = str_pad(CountyId, 5, "left", "0"), men = Men / TotalPop, women = Women / TotalPop, VotingAgeCitizen = VotingAgeCitizen/TotalPop, employed = Employed/TotalPop, ChildPoverty = ifelse(is.na(ChildPoverty), Poverty, ChildPoverty)) %>%
+  mutate_at(c("Hispanic", "White", "Black", "Native", "Asian", "Pacific", "Poverty", "ChildPoverty", "Professional", "Service", "Office", "Construction", "Production", "Drive", "Carpool", "Transit", "Walk", "OtherTransp", "WorkAtHome", "PrivateWork", "PublicWork", "SelfEmployed", "FamilyWork", "Unemployment"), div100) %>%
+  select(fips, VotingAgeCitizen, Income, IncomePerCap, Poverty, ChildPoverty, Professional, Service, Office, Construction, Production, Drive, Carpool, Transit, Walk, OtherTransp, WorkAtHome, MeanCommute, PrivateWork, PublicWork, SelfEmployed, FamilyWork)
+
+#Append to Variable List
+annual_vars <- c(annual_vars, names(acs_2017[,2:(length(acs_2017))]))
+invisible(gc())
+```
+
+```{r acs demographic}
+#Read
+acs_demo <- fread("../Data/ACS_Demographic/ACSDP5Y2019.DP05_data_with_overlays_2021-11-04T121154.csv") %>%
+  clean_names() %>%
+  dplyr::select(contains(c("id", "percent"))) %>%
+  dplyr::select(-contains("margin")) %>%
+  dplyr::mutate(fips = str_sub(id,-5,-1))
+
+#Select Columns
+acs_demo <- bind_cols(
+  acs_demo %>% select(fips),
+  acs_demo %>%
+    dplyr::select_if(is.numeric) %>%
+    dplyr::select(which(colMeans(.) < 100)) %>%
+    dplyr::mutate_all(div100)
+)
+
+#Append to Variable List
+annual_vars <- c(annual_vars, names(acs_demo %>% select(-fips)))
+invisible(gc())
+```
+
+```{r county health data}
+#List files in directory
+ch_dir <- list.files("../Data/CountyHealth")
+
+#Empty Dataframe
+county_health_df <- data.frame()
+
+#Read in loop
+for (i in ch_dir) {
+  temp_df <- openxlsx::read.xlsx(paste0("../Data/CountyHealth/", i), sheet = "Ranked Measure Data", startRow = 2) %>%
+    setNames(., make.unique(names(.)))
+  if ("Borough" %in% names(temp_df)) {
+    temp_df <- temp_df %>% dplyr::rename(County = Borough)
+  } else if ("Parish" %in% names(temp_df)) {
+    temp_df <- temp_df %>% dplyr::rename(County = Parish)
+  }
+  temp_df <- temp_df %>%
+    dplyr::select(FIPS, State, County, Presence.of.Water.Violation, Years.of.Potential.Life.Lost.Rate, `%.Fair.or.Poor.Health`, Average.Number.of.Physically.Unhealthy.Days, Average.Number.of.Physically.Unhealthy.Days, Average.Number.of.Mentally.Unhealthy.Days, `%.Low.birthweight`, `%.Smokers`, `%.Adults.with.Obesity`, Food.Environment.Index, `%.Physically.Inactive`, `%.With.Access.to.Exercise.Opportunities`, `%.Excessive.Drinking`, `%.Driving.Deaths.with.Alcohol.Involvement`, Chlamydia.Rate, teen_birth_per1k = Teen.Birth.Rate, `%.Uninsured`, Primary.Care.Physicians.Rate, Dentist.Rate, Mental.Health.Provider.Rate, Preventable.Hospitalization.Rate, `%.With.Annual.Mammogram`, percent_flu_vax = `%.Vaccinated`, `%.Completed.High.School`, `%.Some.College`, `%.Unemployed`, `%.Children.in.Poverty`, Income.Ratio, `%.Children.in.Single-Parent.Households`, Social.Association.Rate, Violent.Crime.Rate, Injury.Death.Rate, Average.Daily.PM2.5, `%.Severe.Housing.Problems`, `%.Drive.Alone.to.Work`, `%.Long.Commute.-.Drives.Alone`) %>%
+    dplyr::mutate(Presence.of.Water.Violation = ifelse(Presence.of.Water.Violation == "Yes", 1, 0))
+    
+    temp_df_ <- openxlsx::read.xlsx(paste0("../Data/CountyHealth/", i), sheet = "Additional Measure Data", startRow = 2) %>%
+      setNames(., make.unique(names(.)))
+  if ("Borough" %in% names(temp_df_)) {
+    temp_df_ <- temp_df_ %>% dplyr::rename(County = Borough)
+  } else if ("Parish" %in% names(temp_df_)) {
+    temp_df_ <- temp_df_ %>% dplyr::rename(County = Parish)
+  }
+    temp_df_ <- temp_df_ %>%
+      dplyr::select(FIPS, State, County, Life.Expectancy, `Age-Adjusted.Death.Rate`, Child.Mortality.Rate, infant_mortality_per1k = Infant.Mortality.Rate, `%.Frequent.Physical.Distress`, `%.Frequent.Mental.Distress`, `%.Adults.with.Diabetes`, HIV.Prevalence.Rate, `%.Food.Insecure`, `%.Limited.Access.to.Healthy.Foods`, Drug.Overdose.Mortality.Rate, Motor.Vehicle.Mortality.Rate, `%.Insufficient.Sleep`, percent_uninsured_adult = `%.Uninsured`, percent_uninsured_child = `%.Uninsured.1`, Other.Primary.Care.Provider.Rate, High.School.Graduation.Rate, `%.Disconnected.Youth`, reading_grade_performance = Average.Grade.Performance, math_grade_performance = Average.Grade.Performance.1, Median.Household.Income, `%.Enrolled.in.Free.or.Reduced.Lunch`, Segregation.index, Segregation.Index, Homicide.Rate, `Suicide.Rate.(Age-Adjusted)`, Firearm.Fatalities.Rate, juvenile_arrests_per1k = Juvenile.Arrest.Rate, Traffic.Volume, `%.Homeowners`, `%.Severe.Housing.Cost.Burden`, `%.Broadband.Access`, Population, `%.Less.Than.18.Years.of.Age`, `%.65.and.Over`, `%.Black`, `%.American.Indian.&.Alaska.Native`, `%.Asian`, `%.Native.Hawaiian/Other.Pacific.Islander`, `%.Hispanic`, `%.Non-Hispanic.White`, `%.Not.Proficient.in.English`, `%.Female`, `%.Rural`)
+    
+    temp_df <- inner_join(temp_df, temp_df_,  by=c("FIPS", "State", "County")) %>%
+      clean_names() %>%
+      mutate_at(vars(contains("percent")), div100)
+    
+  county_health_df <- dplyr::bind_rows(county_health_df, temp_df)
+}
+
+#County Health State
+county_health_state_df <- county_health_df %>%
+  dplyr::filter(is.na(county)) %>%
+  dplyr::mutate_at(vars(-fips, -state, -county), as.numeric) %>%
+  dplyr::mutate(presence_of_water_violation = 0)
+
+#Drop State Level From County Level
+county_health_df <- county_health_df %>%
+  dplyr::filter(!is.na(county))
+
+#Fill State NA
+for (i in 5:length(county_health_state_df)) {
+  county_health_state_df[,i][is.na(county_health_state_df[,i])] <- mean(county_health_state_df[,i], na.rm=T)
+}
+
+#Empty Dataframe
+ch_df <- data.frame()
+
+#Fill County NA with State Averages
+for (j in county_health_state_df$state) {
+  temp_state_df <- county_health_state_df %>%
+    dplyr::filter(state == j)
+  temp_county_df <- county_health_df %>%
+    dplyr::filter(state == j)
+  
+  for (k in 4:length(county_health_df)) {
+    temp_county_df[,k][is.na(temp_county_df[,k])] <- temp_state_df[,k]
+  }
+  
+  ch_df <- dplyr::bind_rows(ch_df, temp_county_df)
+}
+
+#Append to Variable List
+annual_vars <- c(annual_vars, names(ch_df[,4:(length(ch_df))]))
+invisible(gc())
+```
+
+```{r covid testing}
+#Read
+state_testing_df <- fread("https://raw.githubusercontent.com/govex/COVID-19/master/data_tables/testing_data/time_series_covid19_US.csv") %>%
+  dplyr::select(date, state_ = state, tests_combined_total) %>%
+  dplyr::mutate(date = as.IDate(date, "%m/%d/%Y"), state = state.name[match(state_, state.abb)]) %>%
+  dplyr::mutate(state = ifelse(state_ == "DC", "District of Columbia", state)) %>%
+  dplyr::select(-state_) %>%
+  drop_na() %>%
+  left_join(
+    county_health_state_df %>%
+      dplyr::select(state, population)
+  ) %>%
+  group_by(state) %>%
+  dplyr::mutate(daily_tests = tests_combined_total - dplyr::lag(tests_combined_total, default = 0)) %>%
+  dplyr::mutate(tests_7dayavg_per100k = roll_mean(daily_tests, n = 7, align = "right", fill = 0)/population*100000) %>%
+  dplyr::select(date, state, tests_7dayavg_per100k) %>%
+  dplyr::mutate(tests_7dayavg_per100k_lag7_delta = (tests_7dayavg_per100k / dplyr::lag(tests_7dayavg_per100k, n = 7, default = 0, order_by = date)) - 1) %>%
+  dplyr::mutate(tests_7dayavg_per100k_lag14_delta = (tests_7dayavg_per100k / dplyr::lag(tests_7dayavg_per100k, n = 14, default = 0, order_by = date)) - 1) %>%
+  dplyr::mutate(tests_7dayavg_per100k_lag21_delta = (tests_7dayavg_per100k / dplyr::lag(tests_7dayavg_per100k, n = 21, default = 0, order_by = date)) - 1) %>%
+  dplyr::mutate(tests_7dayavg_per100k_lag28_delta = (tests_7dayavg_per100k / dplyr::lag(tests_7dayavg_per100k, n = 28, default = 0, order_by = date)) - 1) %>%
+  ungroup() %>%
+  replace_na(list(tests_7dayavg_per100k_lag7_delta = 0,
+                  tests_7dayavg_per100k_lag14_delta = 0,
+                  tests_7dayavg_per100k_lag21_delta = 0,
+                  tests_7dayavg_per100k_lag28_delta = 0)) %>%
+  dplyr::mutate(tests_7dayavg_per100k_lag7_delta = ifelse(is.infinite(tests_7dayavg_per100k_lag7_delta), 0, tests_7dayavg_per100k_lag7_delta),
+                tests_7dayavg_per100k_lag14_delta = ifelse(is.infinite(tests_7dayavg_per100k_lag14_delta), 0, tests_7dayavg_per100k_lag14_delta),
+                tests_7dayavg_per100k_lag21_delta = ifelse(is.infinite(tests_7dayavg_per100k_lag21_delta), 0, tests_7dayavg_per100k_lag21_delta),
+                tests_7dayavg_per100k_lag28_delta = ifelse(is.infinite(tests_7dayavg_per100k_lag28_delta), 0, tests_7dayavg_per100k_lag28_delta))
+
+#Append to Variable List
+daily_vars <- c(daily_vars, names(state_testing_df)[grep("tests", names(state_testing_df))])
+invisible(gc())
+```
+
+```{r political data}
+#Read
+political_df <- fread("../Data/countypres_2000-2020.csv") %>%
+  dplyr::filter(year == 2020) %>%
+  dplyr::select(county_fips, party, candidatevotes, totalvotes) %>%
+  dplyr::mutate(fips = str_pad(county_fips, 5, "left", "0"), percent_votes = candidatevotes/totalvotes) %>%
+  dplyr::mutate(fips = gsub("46113", "46102", fips)) %>%
+  dplyr::select(fips, party, percent_votes) %>%
+  pivot_wider(names_from = party, values_from = percent_votes, values_fn = sum) %>%
+  dplyr::mutate(across(-1, ~replace_na(.x, 0))) %>%
+  drop_na()
+
+#Append to Variable List
+annual_vars <- c(annual_vars, names(political_df[,2:(length(political_df))]))
+invisible(gc())
+```
+
+```{r vax data}
+#Read
+vax_df <- fread("../Data/COVID-19_Vaccinations_in_the_United_States_County.csv") %>%
+  dplyr::select(Date, FIPS, Series_Complete_Pop_Pct, Series_Complete_12PlusPop_Pct, Series_Complete_18PlusPop_Pct, Series_Complete_65PlusPop_Pct, Administered_Dose1_Pop_Pct, Administered_Dose1_Recip_12PlusPop_Pct, Administered_Dose1_Recip_18PlusPop_Pct, Administered_Dose1_Recip_65PlusPop_Pct) %>%
+  dplyr::mutate(Date = as.IDate(Date, "%m/%d/%Y")) %>%
+  dplyr::rename(fips = FIPS, date = Date)
+
+#Append to Variable List
+vax_vars <- names(vax_df[,3:length(vax_df)])
+daily_vars <- c(daily_vars, vax_vars)
+invisible(gc())
+```
+
+```{r covid cases data}
+#Read
+cases_df <- fread("../Data/covid_us_county.csv") %>%
+  dplyr::select(fips, date, cases, deaths) %>%
+  dplyr::mutate(fips = str_pad(fips, 5, "left", "0")) %>%
+  dplyr::arrange(fips, date) %>%
+  dplyr::group_by(fips) %>%
+  dplyr::mutate(daily_cases = cases - dplyr::lag(cases, default = 0), daily_deaths = deaths - dplyr::lag(deaths, default = 0)) %>%
+  ungroup()
+
+#Append to Variable List
+daily_vars <- c(daily_vars)
+invisible(gc())
+```
+
+```{r education data}
+#Read
+education_df <- fread("../Data/Education.csv") %>%
+  dplyr::select(contains(c("FIPS", "2015"))) %>%
+  clean_names() %>%
+  dplyr::select(contains(c("fips", "percent"))) %>%
+  dplyr::mutate(fips_code = str_pad(fips_code, 5, "left", "0")) %>%
+  dplyr::mutate_at(-1, div100) %>%
+  dplyr::rename(fips = fips_code)
+
+#Fill NA
+education_df$percent_of_adults_with_less_than_a_high_school_diploma_2015_19[is.na(education_df$percent_of_adults_with_less_than_a_high_school_diploma_2015_19)]<-mean(education_df$percent_of_adults_with_less_than_a_high_school_diploma_2015_19,na.rm=TRUE)
+education_df$percent_of_adults_with_a_high_school_diploma_only_2015_19[is.na(education_df$percent_of_adults_with_a_high_school_diploma_only_2015_19)]<-mean(education_df$percent_of_adults_with_a_high_school_diploma_only_2015_19,na.rm=TRUE)
+education_df$percent_of_adults_completing_some_college_or_associates_degree_2015_19[is.na(education_df$percent_of_adults_completing_some_college_or_associates_degree_2015_19)]<-mean(education_df$percent_of_adults_completing_some_college_or_associates_degree_2015_19,na.rm=TRUE)
+education_df$percent_of_adults_with_a_bachelors_degree_or_higher_2015_19[is.na(education_df$percent_of_adults_with_a_bachelors_degree_or_higher_2015_19)]<-mean(education_df$percent_of_adults_with_a_bachelors_degree_or_higher_2015_19,na.rm=TRUE)
+
+#Append to Variable List
+annual_vars <- c(annual_vars, names(education_df[,2:(length(education_df))]))
+invisible(gc())
+```
+
+```{r temperature data}
+# #Empty Dataframe
+# temperature_df <- data.frame()
+# 
+# #Year Month List
+# yyyy_mm_list <- c(seq(202001, 202012, by=1), seq(202101, 202112, by=1))
+# 
+# #Read Data
+# for (j in yyyy_mm_list) {
+#   temp_df <- fread(paste0("https://www.ncdc.noaa.gov/cag/county/mapping/110-tavg-", as.character(j),"-1.csv")) %>%
+#     add_column(yrmo = as.character(j))
+#   temperature_df <- dplyr::bind_rows(temperature_df, temp_df)
+# }
+# 
+# #FIPS
+# temperature_df$fips <- paste0(substr(abbr_to_fips(substr(temperature_df$`Location ID`, 1, 2)), 1, 2), substr(temperature_df$`Location ID`, 4, 6))
+# 
+# #Clean
+# temperature_df <- temperature_df %>%
+#   select(Value, yrmo, fips) %>%
+#   dplyr::rename(temperature = Value)
+# 
+# #Save
+# write_parquet(temperature_df, "../Data/temperature_df.parquet")
+
+#Read
+temperature_df <- read_parquet("../Data/temperature_df.parquet")
+
+#Append to Variable List
+monthly_vars <- c(monthly_vars, "temperature")
+invisible(gc())
+```
+
+```{r precipitation data}
+# #Empty Dataframe
+# precipitation_df <- data.frame()
+# 
+# #Read Data
+# for (k in yyyy_mm_list) {
+#   temp_df <- fread(paste0("https://www.ncdc.noaa.gov/cag/county/mapping/110-pcp-", as.character(k),"-1.csv")) %>%
+#     add_column(yrmo = as.character(k))
+#   precipitation_df <- dplyr::bind_rows(precipitation_df, temp_df)
+# }
+# 
+# #FIPS
+# precipitation_df$fips <- paste0(substr(abbr_to_fips(substr(precipitation_df$`Location ID`, 1, 2)), 1, 2), substr(precipitation_df$`Location ID`, 4, 6))
+# 
+# #Clean
+# precipitation_df <- precipitation_df %>%
+#   select(Value, yrmo, fips) %>%
+#   dplyr::rename(precipitation = Value)
+# 
+# #Save
+# write_parquet(precipitation_df, "../Data/precipitation_df.parquet")
+
+#Read
+precipitation_df <- read_parquet("../Data/precipitation_df.parquet")
+
+#Append to Variable List
+monthly_vars <- c(monthly_vars, "precipitation")
+invisible(gc())
+```
+
+```{r adi data}
+# #Zip to FIPS Conversion
+# zip_fips_df <- fread("../Data/ZIP-COUNTY-FIPS_2017-06.csv") %>%
+#   select(ZIP, STCOUNTYFP) %>%
+#   dplyr::mutate(ZIP = str_pad(ZIP, 5, "left", "0"), STCOUNTYFP = str_pad(STCOUNTYFP, 5, "left", "0"))
+# 
+# #List files in directory
+# adi_dir <- list.files("../Data/adi")
+# 
+# #Empty Dataframe
+# adi_df <- data.frame()
+# 
+# #Read In Loop
+# for (adi_i in adi_dir) {
+#   #Read
+#   temp_df <- fread(paste0("../Data/adi/", adi_i)) %>%
+#     select(ZIPID, ADI_NATRANK) %>%
+#     dplyr::mutate(ZIPID = substr(ZIPID,2,6), ADI_NATRANK = as.numeric(ADI_NATRANK)) %>%
+#     drop_na() %>%
+#     group_by(ZIPID) %>%
+#     dplyr::summarise(ADI_NATRANK = round(mean(ADI_NATRANK))) %>%
+#     ungroup()
+#   
+#   #Bind Rows
+#   adi_df <- bind_rows(adi_df, temp_df)
+# }
+# 
+# #Weight at County Level by Population
+# adi_df <- adi_df %>%
+#   inner_join(
+#     zip_code_db %>% select(zipcode, population), by=c("ZIPID"="zipcode")
+#   ) %>%
+#   inner_join(
+#     zip_fips_df, by=c("ZIPID"="ZIP")
+#   ) %>%
+#   group_by(STCOUNTYFP) %>%
+#   drop_na() %>%
+#   dplyr::summarise(adi = weighted.mean(ADI_NATRANK, population, na.rm=T))
+# 
+# #Write Zip/ADI
+# write_parquet(adi_df, "../Data/county_adi.parquet")
+
+#Read Zip/ADI
+adi_df <- read_parquet("../Data/county_adi.parquet")
+
+#Append to Variable List
+annual_vars <- c(annual_vars, "adi")
+invisible(gc())
+```
+
+```{r apple mobility}
+#State
+apple_mobility_st_df <- fread("../Data/applemobilitytrends-2021-12-31.csv", header = T) %>%
+  dplyr::filter(country == "United States", geo_type == "sub-region") %>%
+  dplyr::select(-geo_type, -alternative_name, -`sub-region`, -country) %>%
+  melt(id.vars=c("region", "transportation_type")) %>%
+  dplyr::mutate(region = tolower(region), variable = as.IDate(variable, format = "%Y-%m-%d")) %>%
+  dplyr::rename(date = variable, apple_mobility_st = value) %>%
+  fill(apple_mobility_st, .direction = "downup") %>%
+  complete(region, transportation_type, date) %>%
+  tidyr::replace_na(list(apple_mobility_st=1))
+
+#County
+apple_mobility_cty_df <- fread("../Data/applemobilitytrends-2021-12-31.csv", header = T) %>%
+  dplyr::filter(country == "United States", geo_type == "county", !(`sub-region` %in% c("Puerto Rico", "Hawaii", "Alaska", "Guam", "Virgin Islands"))) %>%
+  dplyr::mutate(region = tolower(region), `sub-region` = tolower(`sub-region`)) %>%
+  dplyr::mutate(region = gsub(" county", "", region)) %>%
+  dplyr::filter(!(`sub-region` == "virginia" & grep("city", region))) %>%
+  dplyr::mutate(region = ifelse(region == "doña ana", "dona ana", region)) %>%
+  dplyr::select(-geo_type, -alternative_name, -country) %>%
+  melt(id.vars=c("region", "transportation_type", "sub-region")) %>%
+  dplyr::mutate(region = tolower(region), variable = as.IDate(variable, format = "%Y-%m-%d")) %>%
+  dplyr::rename(date = variable, apple_mobility = value) %>%
+  dplyr::filter(date >= as.Date("2020-06-01"))
+  
+#Join
+apple_mobility_cty_df <- dplyr::left_join(
+  us_counties %>%
+    dplyr::select(region, subregion, fips), apple_mobility_cty_df, by = c("region"="sub-region", "subregion"="region")
+) %>%
+  dplyr::select(-region, -subregion) %>%
+  dplyr::distinct() %>%
+  complete(fips, transportation_type, date) %>%
+  dplyr::group_by(fips, transportation_type) %>%
+  fill(apple_mobility, .direction = "downup") %>%
+  dplyr::ungroup() %>%
+  drop_na(date)
+
+apple_mobility_cty_df <- dplyr::left_join(
+  apple_mobility_cty_df, us_counties %>%
+    dplyr::select(fips, region) %>%
+    dplyr::distinct()
+  ) %>%
+  dplyr::left_join(
+  apple_mobility_st_df
+) %>%
+  dplyr::select(-region)
+
+#Fill Missing Counties with State
+apple_mobility_cty_df <- apple_mobility_cty_df %>%
+  dplyr::mutate(apple_mobility = ifelse(is.na(apple_mobility), apple_mobility_st, apple_mobility)) %>%
+  dplyr::select(-apple_mobility_st) %>%
+  drop_na() %>%
+  spread(transportation_type, apple_mobility) %>%
+  dplyr::rename(apple_driving = driving, apple_transit = transit, apple_walking = walking)
+
+#Write
+#write_parquet(apple_mobility_cty_df, "../Data/apple_mobility_cty_df.parquet")
+
+#Append to Variable List
+daily_vars <- c(daily_vars, "apple_driving", "apple_transit", "apple_walking")
+invisible(gc())
+```
+
+```{r higher risk}
+#Read
+high_risk_df <- fread("../Data/high_risk.csv") %>%
+  dplyr::select(-Footnotes) %>%
+  clean_names() %>%
+  drop_na() %>%
+  dplyr::select(location, contains("share"))
+
+#Append to Variable List
+annual_vars <- c(annual_vars, names(high_risk_df[,2:4]))
+invisible(gc())
+```
+
+```{r health care provider capacity}
+#Read
+provider_capacity_df <- fread("../Data/provider_capacity.csv") %>%
+  dplyr::select(-Footnotes) %>%
+  clean_names() %>%
+  drop_na() %>%
+  dplyr::select(location, hospital_beds_per_10_000_population, icu_beds_per_10_000_population)
+
+#Append to Variable List
+annual_vars <- c(annual_vars, "hospital_beds_per_10_000_population", "icu_beds_per_10_000_population")
+invisible(gc())
+```
+
+```{r critical care workforce}
+#Read
+critical_care_workforce_df <- fread("../Data/care_workforce.csv") %>%
+  dplyr::select(-Footnotes) %>%
+  clean_names() %>%
+  drop_na()
+
+#Append to Variable List
+annual_vars <- c(annual_vars, names(critical_care_workforce_df)[2:4])
+invisible(gc())
+```
+
+```{r insurance}
+#Read
+insurance_df <- fread("../Data/insurance.csv") %>%
+  dplyr::select(-Footnotes) %>%
+  clean_names() %>%
+  drop_na() %>%
+  dplyr::mutate(average_family_deductible_for_employer_sponsored_insurance = as.numeric(gsub("\\$", "", average_family_deductible_for_employer_sponsored_insurance))) %>%
+  dplyr::select(location, average_family_deductible_for_employer_sponsored_insurance, share_of_private_sector_enrollees_in_enrolled_in_self_insured_plans)
+
+#Append to Variable List
+annual_vars <- c(annual_vars, "average_family_deductible_for_employer_sponsored_insurance", "share_of_private_sector_enrollees_in_enrolled_in_self_insured_plans")
+invisible(gc())
+```
+
+```{r covid19 package data}
+#Read
+rcovid_df <- COVID19::covid19(country = "United States", level = 3, end = "2022-01-31") %>%
+  dplyr::select(date, school_closing, workplace_closing, cancel_events, gatherings_restrictions, transport_closing, stay_home_restrictions, internal_movement_restrictions, international_movement_restrictions, information_campaigns, testing_policy, contact_tracing, facial_coverings, vaccination_policy, elderly_people_protection, government_response_index, stringency_index, containment_health_index, economic_support_index, key_local) %>%
+  dplyr::mutate_at(c("school_closing", "workplace_closing", "cancel_events", "gatherings_restrictions", "transport_closing", "stay_home_restrictions", "internal_movement_restrictions", "international_movement_restrictions", "information_campaigns", "testing_policy", "contact_tracing", "facial_coverings", "vaccination_policy", "elderly_people_protection"), as.character) %>%
+  fill(everything(), .direction = "downup") %>%
+  dplyr::mutate(date = as.IDate(date))
+
+#Append to Variable List
+daily_vars <- c(daily_vars, names(rcovid_df[,16:19]))
+invisible(gc())
+```
+
+```{r merge data}
+#Merge Cases and Mobility
+final_df <- dplyr::full_join(cases_df, mobility_df) %>%
+  fill(everything(), .direction = "downup")
+
+invisible(gc())
+
+#Merge ACS Data
+final_df <- final_df %>%
+  dplyr::left_join(acs_2017) %>%
+  dplyr::left_join(acs_demo) %>%
+  dplyr::mutate_if(is.numeric, zoo::na.aggregate)
+
+invisible(gc())
+
+#Merge County Health
+final_df <- final_df %>%
+  dplyr::inner_join(ch_df)
+
+invisible(gc())
+
+#Merge Polisci Data
+final_df <- final_df %>%
+  dplyr::left_join(polisci_df)
+
+invisible(gc())
+
+#Merge Testing
+final_df <- final_df %>%
+  dplyr::inner_join(state_testing_df)
+
+invisible(gc())
+
+#Merge Political
+final_df <- final_df %>%
+  dplyr::inner_join(political_df)
+
+invisible(gc())
+
+#Merge Vax
+final_df <- final_df %>%
+  dplyr::left_join(vax_df) %>%
+  fill(everything(), .direction = "downup")
+
+invisible(gc())
+
+#Merge Education
+final_df <- final_df %>%
+  dplyr::inner_join(education_df)
+
+invisible(gc())
+
+#Merge Temperature and Precipitation
+final_df$yrmo <- paste0(year(final_df$date), str_pad(month(final_df$date), 2, "left", "0"))
+final_df <- final_df %>%
+  dplyr::inner_join(temperature_df) %>%
+  dplyr::inner_join(precipitation_df)
+
+invisible(gc())
+
+#Merge ADI
+final_df <- final_df %>%
+  dplyr::left_join(adi_df, by=c("fips"="STCOUNTYFP")) %>%
+  dplyr::mutate(adi = ifelse(is.na(adi), 67, adi))
+
+invisible(gc())
+
+#Merge Apple
+final_df <- final_df %>%
+  dplyr::left_join(apple_mobility_cty_df) %>%
+  tidyr::replace_na(list(apple_driving = 100, apple_transit = 100, apple_walking = 100))
+
+invisible(gc())
+
+#Merge High Risk
+final_df <- final_df %>%
+  dplyr::left_join(high_risk_df, by=c("state"="location")) %>%
+  tidyr::replace_na(list(at_risk_adults_as_a_share_of_all_adults_ages_18_and_older = high_risk_df$at_risk_adults_as_a_share_of_all_adults_ages_18_and_older[1],
+                  share_of_adults_under_age_65_at_risk = high_risk_df$share_of_adults_under_age_65_at_risk[1],
+                  older_adults_as_a_share_of_all_at_risk_adults = high_risk_df$older_adults_as_a_share_of_all_at_risk_adults[1]))
+
+invisible(gc())
+
+#Merge Provider Capacity
+final_df <- final_df %>%
+  dplyr::left_join(provider_capacity_df, by=c("state"="location")) %>%
+  tidyr::replace_na(list(hospital_beds_per_10_000_population = provider_capacity_df$hospital_beds_per_10_000_population[1],
+                  icu_beds_per_10_000_population = provider_capacity_df$icu_beds_per_10_000_population[1]))
+
+invisible(gc())
+
+#Merge Critical Care Workforce
+final_df <- final_df %>%
+  dplyr::left_join(critical_care_workforce_df, by=c("state"="location")) %>%
+  tidyr::replace_na(list(intensivist_critical_care_physicians_per_10_000_adults = critical_care_workforce_df$intensivist_critical_care_physicians_per_10_000_adults[1],
+                  critical_care_nurses_and_crn_as_per_10_000_adults = critical_care_workforce_df$critical_care_nurses_and_crn_as_per_10_000_adults[1],
+                  total_2nd_line_critical_care_physicians_per_10_000_adults = critical_care_workforce_df$total_2nd_line_critical_care_physicians_per_10_000_adults[1]))
+
+invisible(gc())
+
+#Merge Insurance
+final_df <- final_df %>%
+  dplyr::left_join(insurance_df, by=c("state"="location")) %>%
+  tidyr::replace_na(list(average_family_deductible_for_employer_sponsored_insurance = insurance_df$average_family_deductible_for_employer_sponsored_insurance[1],
+                  share_of_private_sector_enrollees_in_enrolled_in_self_insured_plans = insurance_df$share_of_private_sector_enrollees_in_enrolled_in_self_insured_plans[1]))
+
+invisible(gc())
+
+#Merge R COVID data
+final_df <- final_df %>%
+  dplyr::left_join(rcovid_df, by=c("date", "fips"="key_local")) %>%
+  fill(everything(), .direction = "downup")
+
+invisible(gc())
+```
+
+```{r moving average}
+final_df <- final_df %>%
+  dplyr::group_by(fips) %>%
+  dplyr::mutate(cases_7dayavg_per100k = roll_mean(daily_cases, n = 7, align = "right", fill = 0)/population*100000,
+                deaths_7dayavg_per100k = roll_mean(daily_deaths, n = 7, align = "right", fill = 0)/population*100000) %>%
+  dplyr::ungroup()
+```
+
+```{r lag delta}
+#Case Lag Delta
+final_df <- final_df %>%
+  dplyr::group_by(fips) %>%
+  dplyr::mutate(cases_7dayavg_per100k_lag7_delta = (cases_7dayavg_per100k / dplyr::lag(cases_7dayavg_per100k, n = 7, default = 0, order_by = date)) - 1) %>%
+  dplyr::mutate(cases_7dayavg_per100k_lag14_delta = (cases_7dayavg_per100k / dplyr::lag(cases_7dayavg_per100k, n = 14, default = 0, order_by = date)) - 1) %>%
+  dplyr::mutate(cases_7dayavg_per100k_lag21_delta = (cases_7dayavg_per100k / dplyr::lag(cases_7dayavg_per100k, n = 21, default = 0, order_by = date)) - 1) %>%
+  dplyr::mutate(cases_7dayavg_per100k_lag28_delta = (cases_7dayavg_per100k / dplyr::lag(cases_7dayavg_per100k, n = 28, default = 0, order_by = date)) - 1) %>%
+  dplyr::ungroup() %>%
+  tidyr::replace_na(list(cases_7dayavg_per100k_lag7_delta = 0,
+                  cases_7dayavg_per100k_lag14_delta = 0,
+                  cases_7dayavg_per100k_lag21_delta = 0,
+                  cases_7dayavg_per100k_lag28_delta = 0)) %>%
+  dplyr::mutate(cases_7dayavg_per100k_lag7_delta = ifelse(is.infinite(cases_7dayavg_per100k_lag7_delta), 0, cases_7dayavg_per100k_lag7_delta),
+                cases_7dayavg_per100k_lag14_delta = ifelse(is.infinite(cases_7dayavg_per100k_lag14_delta), 0, cases_7dayavg_per100k_lag14_delta),
+                cases_7dayavg_per100k_lag21_delta = ifelse(is.infinite(cases_7dayavg_per100k_lag21_delta), 0, cases_7dayavg_per100k_lag21_delta),
+                cases_7dayavg_per100k_lag28_delta = ifelse(is.infinite(cases_7dayavg_per100k_lag28_delta), 0, cases_7dayavg_per100k_lag28_delta))
+```
+
+```{r write read final_df and vars}
+#Final df
+#write_parquet(final_df, "../Data/final_df.parquet")
+final_df <- read_parquet("../Data/final_df.parquet")
+
+#Variables
+#write_rds(daily_vars, "../Data/daily_vars.rds")
+daily_vars <- read_rds("../Data/daily_vars.rds")
+
+#write_rds(monthly_vars, "../Data/monthly_vars.rds")
+monthly_vars <- read_rds("../Data/monthly_vars.rds")
+
+#write_rds(annual_vars, "../Data/annual_vars.rds")
+annual_vars <- read_rds("../Data/annual_vars.rds")
+```
+
+```{r correlation}
+#Daily Cases Corr
+final_df %>%
+  dplyr::filter(year(date) == 2021) %>%
+  dplyr::select(cases_7dayavg_per100k, deaths_7dayavg_per100k, all_of(daily_vars)) %>%
+  corrr::correlate() %>%
+  corrr::focus(cases_7dayavg_per100k) %>%
+  dplyr::mutate(term = reorder(term, cases_7dayavg_per100k)) %>%
+  ggplot(aes(term, cases_7dayavg_per100k)) +
+    geom_col(fill = plotly_colors[1]) + coord_flip() +
+    #labs(title  ="Daily Variables: Correlation with Cases Per 100k (7 Day Avg)") +
+    scale_y_continuous(labels = scales::percent_format(accuracy = 1)) +
+    theme_ipsum(base_family = "Futura Medium") +
+    theme(axis.title.y = element_blank(), axis.title.x = element_blank(), panel.grid.minor = element_blank())
+
+#Daily Deaths Corr
+final_df %>%
+  dplyr::filter(year(date) == 2021) %>%
+  dplyr::select(cases_7dayavg_per100k, deaths_7dayavg_per100k, all_of(daily_vars)) %>%
+  corrr::correlate() %>%
+  corrr::focus(deaths_7dayavg_per100k) %>%
+  dplyr::mutate(term = reorder(term, deaths_7dayavg_per100k)) %>%
+  ggplot(aes(term, deaths_7dayavg_per100k)) +
+    geom_col(fill = plotly_colors[2]) + coord_flip() +
+    #ggtitle("Daily Variables: Correlation with Deaths Per 100k (7 Day Avg)") +
+    scale_y_continuous(labels = scales::percent_format(accuracy = 1)) +
+    theme_ipsum(base_family = "Futura Medium") +
+    theme(axis.title.y = element_blank(), axis.title.x = element_blank(), panel.grid.minor = element_blank())
+
+#Monthly Cases Corr
+final_df %>%
+  dplyr::filter(year(date) == 2021) %>%
+  dplyr::select(fips, yrmo, daily_cases, daily_deaths, all_of(monthly_vars), population) %>%
+  dplyr::group_by(fips, yrmo) %>%
+  dplyr::mutate(monthly_cases_per100k = sum(daily_cases)/population*100000, monthly_deaths_per100k = sum(daily_deaths)/population*100000) %>%
+  summarise_all(mean) %>%
+  dplyr::ungroup() %>%
+  dplyr::select(-fips, -yrmo, -population, -daily_cases, -daily_deaths) %>%
+  corrr::correlate() %>%
+  corrr::focus(monthly_cases_per100k) %>%
+  dplyr::mutate(term = reorder(term, monthly_cases_per100k)) %>%
+  ggplot(aes(term, monthly_cases_per100k)) +
+    geom_col(fill = plotly_colors[1]) + coord_flip() +
+    #ggtitle("Monthly Variables: Correlation with Cases Per 100k") +
+    scale_y_continuous(labels = scales::percent_format(accuracy = 1)) +
+    theme_ipsum(base_family = "Futura Medium") +
+    theme(axis.title.y = element_blank(), axis.title.x = element_blank(), panel.grid.minor = element_blank()) +
+
+#Monthly Deaths Corr
+final_df %>%
+  dplyr::filter(year(date) == 2021) %>%
+  dplyr::select(fips, yrmo, daily_cases, daily_deaths, all_of(monthly_vars), population) %>%
+  dplyr::group_by(fips, yrmo) %>%
+  dplyr::mutate(monthly_cases_per100k = sum(daily_cases)/population*100000, monthly_deaths_per100k = sum(daily_deaths)/population*100000) %>%
+  summarise_all(mean) %>%
+  dplyr::ungroup() %>%
+  dplyr::select(-fips, -yrmo, -population, -daily_cases, -daily_deaths) %>%
+  corrr::correlate() %>%
+  corrr::focus(monthly_deaths_per100k) %>%
+  dplyr::mutate(term = reorder(term, monthly_deaths_per100k)) %>%
+  ggplot(aes(term, monthly_deaths_per100k)) +
+    geom_col(fill = plotly_colors[2]) + coord_flip() +
+    #ggtitle("Monthly Variables: Correlation with Deaths Per 100k") +
+    scale_y_continuous(labels = scales::percent_format(accuracy = 1)) +
+    theme_ipsum(base_family = "Futura Medium") +
+    theme(axis.title.y = element_blank(), axis.title.x = element_blank(), panel.grid.minor = element_blank())
+
+#Annual Cases Corr
+annual_cases_corr <- final_df %>%
+  dplyr::filter(year(date) == 2021) %>%
+  dplyr::select(fips, daily_cases, daily_deaths, all_of(annual_vars)) %>%
+  dplyr::group_by(fips) %>%
+  dplyr::mutate(daily_cases = sum(daily_cases), daily_deaths = sum(daily_deaths)) %>%
+  summarise_all(mean) %>%
+  dplyr::mutate(annual_cases_per100k = daily_cases/population, annual_deaths_per100k = daily_deaths/population) %>%
+  dplyr::ungroup() %>%
+  dplyr::select(-fips, -daily_cases, -daily_deaths, -population) %>%
+  corrr::correlate() %>%
+  corrr::focus(annual_cases_per100k) %>%
+  dplyr::mutate(term = reorder(term, annual_cases_per100k)) %>%
+  drop_na()
+
+bind_rows(
+  annual_cases_corr %>%
+    slice_max(n=25, order_by = annual_cases_per100k),
+  annual_cases_corr %>%
+    slice_min(n=25, order_by = annual_cases_per100k)
+) %>%
+ggplot(aes(term, annual_cases_per100k)) +
+  geom_col(fill = plotly_colors[1]) + coord_flip() +
+  #ggtitle("Annual Variables: Correlation with Cases Per 100k") +
+  scale_y_continuous(labels = scales::percent_format(accuracy = 1)) +
+  theme_ipsum(base_family = "Futura Medium") +
+  theme(axis.title.y = element_blank(), axis.title.x = element_blank(), panel.grid.minor = element_blank())
+
+#Annual Deaths Corr
+annual_deaths_corr <- final_df %>%
+  dplyr::filter(year(date) == 2021) %>%
+  dplyr::select(fips, daily_cases, daily_deaths, all_of(annual_vars)) %>%
+  dplyr::group_by(fips) %>%
+  dplyr::mutate(daily_cases = sum(daily_cases), daily_deaths = sum(daily_deaths)) %>%
+  summarise_all(mean) %>%
+  dplyr::mutate(annual_cases_per100k = daily_cases/population, annual_deaths_per100k = daily_deaths/population) %>%
+  dplyr::ungroup() %>%
+  dplyr::select(-fips, -daily_cases, -daily_deaths, -population) %>%
+  corrr::correlate() %>%
+  corrr::focus(annual_deaths_per100k) %>%
+  dplyr::mutate(term = reorder(term, annual_deaths_per100k)) %>%
+  drop_na()
+
+bind_rows(
+  annual_deaths_corr %>%
+    slice_max(n=25, order_by = annual_deaths_per100k),
+  annual_deaths_corr %>%
+    slice_min(n=25, order_by = annual_deaths_per100k)
+) %>%
+ggplot(aes(term, annual_deaths_per100k)) +
+  geom_col(fill = plotly_colors[2]) + coord_flip() +
+  #ggtitle("Annual Variables: Correlation with Deaths Per 100k") +
+  scale_y_continuous(labels = scales::percent_format(accuracy = 1)) +
+  theme_ipsum(base_family = "Futura Medium") +
+  theme(axis.title.y = element_blank(), axis.title.x = element_blank(), panel.grid.minor = element_blank())
+
+#Cases/Vax
+ggplotly(
+  final_df %>%
+    dplyr::filter(year(date) == 2021) %>%
+    dplyr::select(cases_7dayavg_per100k, deaths_7dayavg_per100k, all_of(vax_vars)) %>%
+    corrr::correlate() %>%
+    corrr::focus(cases_7dayavg_per100k) %>%
+    dplyr::mutate(term = reorder(term, cases_7dayavg_per100k)) %>%
+    ggplot(aes(term, cases_7dayavg_per100k)) +
+      geom_col(fill = plotly_colors[1]) + coord_flip() +
+      theme_minimal() +
+      theme(axis.title.y = element_blank(), axis.title.x = element_blank(), panel.grid.minor = element_blank()) +
+      ggtitle("Cases Per 100k (7 Day Avg) & Vax/Deaths Correlation")
+)
+
+#Deaths/Vax
+ggplotly(
+  final_df %>%
+    dplyr::filter(year(date) == 2021) %>%
+    dplyr::select(cases_7dayavg_per100k, deaths_7dayavg_per100k, all_of(vax_vars)) %>%
+    corrr::correlate() %>%
+    corrr::focus(deaths_7dayavg_per100k) %>%
+    dplyr::mutate(term = reorder(term, deaths_7dayavg_per100k)) %>%
+    ggplot(aes(term, deaths_7dayavg_per100k)) +
+      geom_col(fill = plotly_colors[2]) + coord_flip() +
+      theme_minimal() +
+      theme(axis.title.y = element_blank(), axis.title.x = element_blank(), panel.grid.minor = element_blank()) +
+      ggtitle("Deaths Per 100k (7 Day Avg) & Vax/Cases Correlation")
+)
+
+#Mental Health
+mh_corr <- final_df %>%
+  dplyr::filter(year(date) == 2021) %>%
+  dplyr::select(fips, daily_cases, daily_deaths, all_of(annual_vars)) %>%
+  dplyr::group_by(fips) %>%
+  dplyr::mutate(daily_cases = sum(daily_cases), daily_deaths = sum(daily_deaths)) %>%
+  summarise_all(mean) %>%
+  dplyr::mutate(annual_cases_per100k = daily_cases/population, annual_deaths_per100k = daily_deaths/population) %>%
+  dplyr::ungroup() %>%
+  dplyr::select(-fips, -daily_cases, -daily_deaths, -population) %>%
+  corrr::correlate() %>%
+  corrr::focus(average_number_of_mentally_unhealthy_days) %>%
+  dplyr::mutate(term = reorder(term, average_number_of_mentally_unhealthy_days)) %>%
+  drop_na()
+
+bind_rows(
+  mh_corr %>%
+    slice_max(n=25, order_by = average_number_of_mentally_unhealthy_days),
+  mh_corr %>%
+    slice_min(n=25, order_by = average_number_of_mentally_unhealthy_days)
+) %>%
+ggplot(aes(term, average_number_of_mentally_unhealthy_days)) +
+  geom_col(fill = plotly_colors[3]) + coord_flip() +
+  #ggtitle("Correlation with Mental Health") +
+  scale_y_continuous(labels = scales::percent_format(accuracy = 1)) +
+  theme_ipsum(base_family = "Futura Medium") +
+  theme(axis.title.y = element_blank(), axis.title.x = element_blank(), panel.grid.minor = element_blank())
+
+#Physical Health
+ph_corr <- final_df %>%
+  dplyr::filter(year(date) == 2021) %>%
+  dplyr::select(fips, daily_cases, daily_deaths, all_of(annual_vars)) %>%
+  dplyr::group_by(fips) %>%
+  dplyr::mutate(daily_cases = sum(daily_cases), daily_deaths = sum(daily_deaths)) %>%
+  summarise_all(mean) %>%
+  dplyr::mutate(annual_cases_per100k = daily_cases/population, annual_deaths_per100k = daily_deaths/population) %>%
+  dplyr::ungroup() %>%
+  dplyr::select(-fips, -daily_cases, -daily_deaths, -population) %>%
+  corrr::correlate() %>%
+  corrr::focus(average_number_of_physically_unhealthy_days) %>%
+  dplyr::mutate(term = reorder(term, average_number_of_physically_unhealthy_days)) %>%
+  drop_na()
+
+bind_rows(
+  ph_corr %>%
+    slice_max(n=25, order_by = average_number_of_physically_unhealthy_days),
+  ph_corr %>%
+    slice_min(n=25, order_by = average_number_of_physically_unhealthy_days)
+) %>%
+ggplot(aes(term, average_number_of_physically_unhealthy_days)) +
+  geom_col(fill = plotly_colors[3]) + coord_flip() +
+  #ggtitle("Correlation with Physical Health") +
+  scale_y_continuous(labels = scales::percent_format(accuracy = 1)) +
+  theme_ipsum(base_family = "Futura Medium") +
+  theme(axis.title.y = element_blank(), axis.title.x = element_blank(), panel.grid.minor = element_blank())
+
+invisible(gc())
+```
+
+```{r timeline cumulative}
+#Aggregate
+timeline_cuml_df <- cases_df %>%
+  dplyr::group_by(date) %>%
+  dplyr::summarise(cases = sum(cases, na.rm = T), deaths = sum(deaths, na.rm = T)) %>%
+  dplyr::filter(date <= "2022-01-01")
+
+#Coefficient for dual axis
+coeff_cuml <- max(timeline_cuml_df$cases)/max(timeline_cuml_df$deaths)
+
+#Plot
+ggplot(timeline_cuml_df, aes(x=date)) +
+  geom_line(aes(y=cases), size=1, color=plotly_colors[1], alpha=.7) + 
+  geom_line(aes(y=deaths*coeff_cuml), size=1, color=plotly_colors[2], alpha=.7) +
+  scale_y_continuous(
+    name = "Cases",
+    labels = scales::comma_format(),
+    breaks=seq(0,70000000,10000000),
+    sec.axis = sec_axis(~./coeff_cuml, name="Deaths", labels = scales::comma_format(), breaks=seq(0,1000000,100000))
+  ) +
+  theme_ipsum(base_family = "Futura Medium") +
+  theme(
+    axis.title.y = element_text(color = plotly_colors[1], size=20),
+    axis.title.y.right = element_text(color = plotly_colors[2], size=20),
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor = element_blank()
+  ) +
+  xlab("") +
+  xlim(as.Date("2020-01-01"), as.Date("2022-03-01")) +
+  #ggtitle("Cumulative COVID-19 Cases/Deaths in the United States of America", subtitle = "Data Through January 1, 2022") +
+  #labs(caption = "Data Source: Johns Hopkins University") +
+  geom_label(x=as.Date("2022-02-01"), y=49000000, label=paste0("Total Cases: ", number(max(timeline_cuml_df$cases), accuracy = 1, big.mark = ",")), size=3, color=plotly_colors[1]) +
+  geom_label(x=as.Date("2022-02-01"), y=56000000, label=paste0("Total Deaths: ", number(max(timeline_cuml_df$deaths), accuracy = 1, big.mark = ",")), size=3, color=plotly_colors[2]) +
+  geom_vline(xintercept = as.Date("2020-03-13"), linetype="dashed", color = plotly_colors[8], size=.8) +
+  annotate(x=as.Date("2020-03-13"), y=20000000, label="March 13, 2020\nUSA Declares\nNational Emergency", geom="label", size=2, color = plotly_colors[8]) +
+  geom_vline(xintercept = as.Date("2020-12-14"), linetype="dashed", color = plotly_colors[8], size=.8) +
+  annotate(x=as.Date("2020-12-14"), y=40000000, label="December 14, 2020\n1st COVID-19 Vaccine\nGiven in USA", geom="label", size=2, color = plotly_colors[8]) +
+  geom_vline(xintercept = as.Date("2021-04-21"), linetype="dashed", color = plotly_colors[8], size=.8) +
+  annotate(x=as.Date("2021-04-21"), y=50000000, label="April 21, 2021\nDelta Variant\n1st Confirmed USA Case", geom="label", size=2, color = plotly_colors[8]) +
+  geom_vline(xintercept = as.Date("2021-12-01"), linetype="dashed", color = plotly_colors[8], size=.8) +
+  annotate(x=as.Date("2021-12-01"), y=30000000, label="December 1, 2021\nOmicron Variant\n1st Confirmed USA Case", geom="label", size=2, color = plotly_colors[8]) 
+
+invisible(gc())
+```
+
+```{r timeline per day}
+#Aggregate
+final_df_timeline <- final_df %>%
+  dplyr::filter(date >= "2020-04-01") %>%
+  dplyr::group_by(date) %>%
+  dplyr::summarise(cases_7dayavg_per100k = sum(cases_7dayavg_per100k), deaths_7dayavg_per100k = sum(deaths_7dayavg_per100k))
+
+#Coefficient for dual axis
+coeff = max(final_df_timeline$cases_7dayavg_per100k)/max(final_df_timeline$deaths_7dayavg_per100k)
+
+#Plot
+ggplot(final_df_timeline, aes(x=date)) +
+  geom_line(aes(y=cases_7dayavg_per100k), size=1, color=plotly_colors[1], alpha=.7) + 
+  geom_line(aes(y=deaths_7dayavg_per100k*coeff), size=1, color=plotly_colors[2], alpha=.7) +
+  scale_y_continuous(
+    name = "Cases Per 100k (7 Day Avg)",
+    labels = scales::comma_format(),
+    sec.axis = sec_axis(~./coeff, name="Deaths Per 100k (7 Day Avg)")
+  ) +
+  theme_ipsum(base_family = "Futura Medium") +
+  theme(
+    axis.title.y = element_text(color = plotly_colors[1], size=13),
+    axis.title.y.right = element_text(color = plotly_colors[2], size=13)
+  ) +
+  xlab("")
+
+gc()
+```
+
+```{r model prep}
+#Add Lead Columns For Cases/Deaths and Month
+final_df <- final_df %>%
+  dplyr::group_by(fips) %>%
+  dplyr::mutate(cases_7dayavg_per100k_lead30 = dplyr::lead(cases_7dayavg_per100k, n=30, default=0),
+         deaths_7dayavg_per100k_lead30 = dplyr::lead(deaths_7dayavg_per100k, n=30, default=0),
+         month = month(date, label=T)) %>%
+  dplyr::ungroup()
+
+#Add Lag Columns for Previous Month's Temperature and Precipitation
+final_df <- final_df %>%
+  dplyr::left_join(
+    final_df %>%
+      dplyr::select(date, fips, temperature, precipitation) %>%
+      dplyr::mutate(date = as.Date(date %m+% months(1))) %>%
+      dplyr::rename(temperature_lag_1mo = temperature, precipitation_lag_1mo = precipitation) %>%
+      dplyr::distinct()
+  ) %>%
+  tidyr::fill(c("temperature_lag_1mo", "precipitation_lag_1mo"), .direction = "downup")
+
+#Set Seed
+set.seed(84)
+
+#Partition - Test on Final Months
+train_test <- final_df %>%
+  dplyr::filter(between(date, as.Date("2020-07-01"), as.Date("2021-11-30")))
+train <- final_df %>%
+  dplyr::filter(between(date, as.Date("2020-07-01"), as.Date("2021-08-31")))
+test <- final_df %>%
+  dplyr::filter(between(date, as.Date("2021-09-01"), as.Date("2021-11-30")))
+
+#Define X/Y
+train_test_x <- data.matrix(train_test %>% select(-fips, -date, -cases, -deaths, -daily_cases, -daily_deaths, -cases_7dayavg_per100k_lead30, -deaths_7dayavg_per100k_lead30, -yrmo))
+train_test_cases_y <- train_test$cases_7dayavg_per100k_lead30
+train_test_deaths_y <- train_test$deaths_7dayavg_per100k_lead30
+
+train_x = data.matrix(train %>% select(-fips, -date, -cases, -deaths, -daily_cases, -daily_deaths, -cases_7dayavg_per100k_lead30, -deaths_7dayavg_per100k_lead30, -yrmo))
+train_cases_y = train$cases_7dayavg_per100k_lead30
+train_deaths_y = train$deaths_7dayavg_per100k_lead30
+
+test_x = data.matrix(test %>% select(-fips, -date, -cases, -deaths, -daily_cases, -daily_deaths, -cases_7dayavg_per100k_lead30, -deaths_7dayavg_per100k_lead30, -yrmo))
+test_cases_y = test$cases_7dayavg_per100k_lead30
+test_deaths_y = test$deaths_7dayavg_per100k_lead30
+
+invisible(gc())
+```
+
+```{r xgboost model cases}
+set.seed(84)
+
+#Training and Validation Matrices
+dtrain <- xgb.DMatrix(data.matrix(train_x),
+                      label = train_cases_y)
+dvalid <- xgb.DMatrix(data.matrix(test_x),
+                      label = test_cases_y)
+
+#Parameters
+params <- list(
+  eta = c(.1),
+  objective = "reg:squarederror",
+  learning_rate = 0.05,
+  subsample = c(1),
+  colsample_bynode = 1,
+  reg_lambda = 2,
+  max_depth = c(5),
+  nthreads = 4
+)
+
+# #Fit Model (Training is intentionally overfit in order to see importance of variables. Testing may not perform well.)
+# fit_xgb_cases <- xgboost(
+#   params,
+#   data = dtrain,
+#   early_stopping_rounds = 20,
+#   print_every_n = 10,
+#   nrounds = 100
+# )
+# 
+# #Save Model
+# saveRDS(fit_xgb_cases, "../Model/fit_xgb_cases.rds")
+
+#Read Model
+fit_xgb_cases <- readRDS("../Model/fit_xgb_cases.rds")
+
+#Predict
+train_pred <- predict(fit_xgb_cases, train_x)
+test_pred <- predict(fit_xgb_cases, test_x)
+
+#Empty dataframe
+overfit_cases <- setNames(data.frame(matrix(nrow = 0, ncol = 3)), c("Metric", "Train", "Test"))
+
+#RMSE
+overfit_cases[1, 1] <- "RMSE"
+overfit_cases[1, 2] <- round(Metrics::rmse(train_cases_y, train_pred), 4)
+overfit_cases[1, 3] <- round(Metrics::rmse(test_cases_y, test_pred), 4)
+
+#MAE
+overfit_cases[2, 1] <- "MAE"
+overfit_cases[2, 2] <- round(Metrics::mae(train_cases_y, train_pred), 4)
+overfit_cases[2, 3] <- round(Metrics::mae(test_cases_y, test_pred), 4)
+
+#R^2
+overfit_cases[3, 1] <- "R^2"
+overfit_cases[3, 2] <- round(cor(train_cases_y, train_pred) ^ 2, 4)
+overfit_cases[3, 3] <- round(cor(test_cases_y, test_pred) ^ 2, 4)
+
+#GT
+gt(overfit_cases) %>%
+  tab_options(table.font.names = "Futura")
+
+#Variable Importance
+xgb.importance(colnames(dtrain), model = fit_xgb_cases) %>%
+  slice_max(order_by = Gain, n=25) %>%
+  ggplot(aes(y = reorder(Feature,Gain),Gain)) +
+  geom_bar(stat="identity", fill = plotly_colors[9]) +
+  theme_ipsum(base_family = "Futura Medium") +
+  ylab("") +
+  theme(panel.grid.minor = element_blank())
+
+#Plot Actual vs Predicted
+data.frame(date = train_test$date,
+           population = train_test$population,
+           actual = train_test$cases_7dayavg_per100k_lead30,
+           prediction = predict(fit_xgb_cases, data.matrix(train_test %>%
+                                                             dplyr::select(-fips, -date, -cases, -deaths, -daily_cases, -daily_deaths, -cases_7dayavg_per100k_lead30, -deaths_7dayavg_per100k_lead30, -yrmo)))) %>%
+  dplyr::mutate(date = as.Date(date) + 30, actual = population * actual, prediction = population * prediction) %>%
+  dplyr::group_by(date) %>%
+  summarise_all(sum) %>%
+  dplyr::mutate(actual = actual/population, prediction = prediction/population) %>%
+  dplyr::ungroup() %>%
+  dplyr::select(-population) %>%
+  pivot_longer(cols = c(actual, prediction)) %>%
+  ggplot(aes(x=date, y=value, group=name, color=name, size=name)) +
+  geom_line() +
+  scale_size_manual(values = c(1.25, .75)) +
+  theme_ipsum(base_family = "Futura Medium") +
+  ylab("Cases Per 100k (7 Day Avg)") +
+  xlab("") +
+  #ggtitle("National COVID-19 Cases: Actual vs Prediction") +
+  theme(legend.title = element_blank(), panel.grid.minor = element_blank()) +
+  scale_color_manual(values=c(plotly_colors[1], plotly_colors[8]))
+
+#Clean Up
+gc()
+```
+
+```{r xgboost watch model cases}
+set.seed(84)
+
+#Watchlist (Prevent Overfitting)
+watchlist <- list(train=dtrain, test=dvalid)
+
+# #Train Model
+# fit_xgb_cases_watch <- xgb.train(
+#   params,
+#   data = dtrain,
+#   early_stopping_rounds = 20,
+#   print_every_n = 1,
+#   nrounds = 100,
+#   watchlist=watchlist
+# )
+# 
+# #Final Model
+# fit_xgb_cases_watch <- xgboost(params, data = dtrain, nrounds = 19, verbose = 0)
+# 
+# #Save Model
+# saveRDS(fit_xgb_cases_watch, "../Model/fit_xgb_cases_watch.rds")
+
+#Read Model
+fit_xgb_cases_watch <- readRDS("../Model/fit_xgb_cases_watch.rds")
+
+#Predict
+train_pred <- predict(fit_xgb_cases_watch, train_x)
+test_pred <- predict(fit_xgb_cases_watch, test_x)
+
+#Empty dataframe
+fit_cases <- setNames(data.frame(matrix(nrow = 0, ncol = 3)), c("Metric", "Train", "Test"))
+
+#RMSE
+fit_cases[1, 1] <- "RMSE"
+fit_cases[1, 2] <- round(Metrics::rmse(train_cases_y, train_pred), 4)
+fit_cases[1, 3] <- round(Metrics::rmse(test_cases_y, test_pred), 4)
+
+#MAE
+fit_cases[2, 1] <- "MAE"
+fit_cases[2, 2] <- round(Metrics::mae(train_cases_y, train_pred), 4)
+fit_cases[2, 3] <- round(Metrics::mae(test_cases_y, test_pred), 4)
+
+#R^2
+fit_cases[3, 1] <- "R^2"
+fit_cases[3, 2] <- round(cor(train_cases_y, train_pred) ^ 2, 4)
+fit_cases[3, 3] <- round(cor(test_cases_y, test_pred) ^ 2, 4)
+
+#GT
+gt(fit_cases) %>%
+  tab_options(table.font.names = "Futura")
+
+#Variable Importance
+xgb.importance(colnames(dtrain), model = fit_xgb_cases_watch) %>%
+  slice_max(order_by = Gain, n=25) %>%
+  ggplot(aes(y = reorder(Feature,Gain),Gain)) +
+  geom_bar(stat="identity", fill = plotly_colors[1]) +
+  theme_ipsum(base_family = "Futura Medium") +
+  ylab("") +
+  theme(panel.grid.minor = element_blank())
+
+#Plot Actual vs Predicted
+data.frame(date = train_test$date,
+           population = train_test$population,
+           actual = train_test_cases_y,
+           prediction = predict(fit_xgb_cases_watch, train_test_x)) %>%
+  mutate(date = as.Date(date) + 30, actual = population * actual, prediction = population * prediction) %>%
+  group_by(date) %>%
+  summarise_all(sum) %>%
+  mutate(actual = actual/population, prediction = prediction/population) %>%
+  ungroup() %>%
+  dplyr::select(-population) %>%
+  pivot_longer(cols = c(actual, prediction)) %>%
+  ggplot(aes(x=date, y=value, group=name, color=name, size=name)) +
+  geom_line() +
+  scale_size_manual(values = c(1.25, .75)) +
+  theme_ipsum(base_family = "Futura Medium") +
+  ylab("Cases Per 100k (7 Day Avg)") +
+  xlab("") +
+  #ggtitle("National COVID-19 Cases: Actual vs Prediction") +
+  theme(legend.title = element_blank(), panel.grid.minor = element_blank()) +
+  scale_color_manual(values=c(plotly_colors[1], plotly_colors[8]))
+
+#Clean Up
+gc()
+```
+
+```{r xgboost model deaths}
+set.seed(84)
+
+#Training and Validation Matrices
+dtrain_deaths <- xgb.DMatrix(data.matrix(train_x),
+                      label = train_deaths_y)
+dvalid_deaths <- xgb.DMatrix(data.matrix(test_x),
+                      label = test_deaths_y)
+
+# #Fit Model (Training is intentionally overfit in order to see importance of variables. Testing may not perform well.)
+# fit_xgb_deaths <- xgboost(
+#   params,
+#   data = dtrain_deaths,
+#   early_stopping_rounds = 20,
+#   print_every_n = 10,
+#   nrounds = 100
+# )
+# 
+# #Save Model
+# saveRDS(fit_xgb_deaths, "../Model/fit_xgb_deaths.rds")
+
+#Read Model
+fit_xgb_deaths <- readRDS("../Model/fit_xgb_deaths.rds")
+
+#Predict
+train_pred <- predict(fit_xgb_deaths, train_x)
+test_pred <- predict(fit_xgb_deaths, test_x)
+
+#RMSE
+Metrics::rmse(train_deaths_y, train_pred)
+Metrics::rmse(test_deaths_y, test_pred)
+
+#MAE
+Metrics::mae(train_deaths_y, train_pred)
+Metrics::mae(test_deaths_y, test_pred)
+
+#R^2
+cor(train_deaths_y, train_pred) ^ 2
+cor(test_deaths_y, test_pred) ^ 2
+
+#Variable Importance
+xgb.importance(colnames(dtrain), model = fit_xgb_deaths) %>%
+  slice_max(order_by = Gain, n=25) %>%
+  ggplot(aes(y = reorder(Feature,Gain),Gain)) +
+  geom_bar(stat="identity", fill = plotly_colors[9]) +
+  theme_ipsum() +
+  ylab("") +
+  theme(panel.grid.minor = element_blank())
+
+#Plot Actual vs Predicted
+data.frame(date = train_test$date, population = train_test$population, actual = train_test_deaths_y, prediction = predict(fit_xgb_deaths, train_test_x)) %>%
+  mutate(date = as.Date(date) + 30, actual = population * actual, prediction = population * prediction) %>%
+  group_by(date) %>%
+  summarise_all(sum) %>%
+  mutate(actual = actual/population, prediction = prediction/population) %>%
+  ungroup() %>%
+  plot_ly(type = 'scatter', mode = 'lines') %>%
+  add_trace(x = ~date, y = ~actual, name = 'Actual', line = list(color = plotly_colors[2])) %>%
+  add_trace(x = ~date, y = ~prediction, name = 'Prediction', line = list(color = plotly_colors[8], width = 1)) %>%
+  layout(
+    title = "USA Deaths: Actual vs 30-Day Prediction",
+    xaxis = list(title=""),
+    yaxis = list(title="Deaths Per 100k (7 Day Avg)")
+  )
+
+#Clean Up
+gc()
+```
+
+```{r xgboost watch model deaths}
+set.seed(84)
+
+# #Watchlist (Prevent Overfitting)
+# watchlist <- list(train=dtrain_deaths, test=dvalid_deaths)
+# 
+# #Train Model
+# fit_xgb_deaths_watch <- xgb.train(
+#   params,
+#   data = dtrain_deaths,
+#   early_stopping_rounds = 20,
+#   print_every_n = 1,
+#   nrounds = 100,
+#   watchlist=watchlist
+# )
+# 
+# #Final Model
+# fit_xgb_deaths_watch <- xgboost(params, data = dtrain_deaths, nrounds = 16, verbose = 0)
+# 
+# #Save Model
+# saveRDS(fit_xgb_deaths_watch, "../Model/fit_xgb_deaths_watch.rds")
+
+#Read Model
+fit_xgb_deaths_watch <- readRDS("../Model/fit_xgb_deaths_watch.rds")
+
+#Predict
+train_pred <- predict(fit_xgb_deaths_watch, train_x)
+test_pred <- predict(fit_xgb_deaths_watch, test_x)
+
+#Empty dataframe
+fit_deaths <- setNames(data.frame(matrix(nrow = 0, ncol = 3)), c("Metric", "Train", "Test"))
+
+#RMSE
+fit_deaths[1, 1] <- "RMSE"
+fit_deaths[1, 2] <- round(Metrics::rmse(train_deaths_y, train_pred), 4)
+fit_deaths[1, 3] <- round(Metrics::rmse(test_deaths_y, test_pred), 4)
+
+#MAE
+fit_deaths[2, 1] <- "MAE"
+fit_deaths[2, 2] <- round(Metrics::mae(train_deaths_y, train_pred), 4)
+fit_deaths[2, 3] <- round(Metrics::mae(test_deaths_y, test_pred), 4)
+
+#R^2
+fit_deaths[3, 1] <- "R^2"
+fit_deaths[3, 2] <- round(cor(train_deaths_y, train_pred) ^ 2, 4)
+fit_deaths[3, 3] <- round(cor(test_deaths_y, test_pred) ^ 2, 4)
+
+#GT
+gt(fit_deaths) %>%
+  tab_options(table.font.names = "Futura")
+
+#Variable Importance
+xgb.importance(colnames(dtrain), model = fit_xgb_deaths_watch) %>%
+  slice_max(order_by = Gain, n=25) %>%
+  ggplot(aes(y = reorder(Feature,Gain),Gain)) +
+  geom_bar(stat="identity", fill = plotly_colors[2]) +
+  theme_ipsum(base_family = "Futura Medium") +
+  ylab("") +
+  theme(panel.grid.minor = element_blank())
+
+#Plot Actual vs Predicted
+data.frame(date = train_test$date,
+           population = train_test$population,
+           actual = train_test_deaths_y,
+           prediction = predict(fit_xgb_deaths_watch, train_test_x)) %>%
+  mutate(date = as.Date(date) + 30, actual = population * actual, prediction = population * prediction) %>%
+  group_by(date) %>%
+  summarise_all(sum) %>%
+  mutate(actual = actual/population, prediction = prediction/population) %>%
+  ungroup() %>%
+  dplyr::select(-population) %>%
+  pivot_longer(cols = c(actual, prediction)) %>%
+  ggplot(aes(x=date, y=value, group=name, color=name, size=name)) +
+  geom_line() +
+  scale_size_manual(values = c(1.25, .75)) +
+  theme_ipsum(base_family = "Futura Medium") +
+  ylab("Deaths Per 100k (7 Day Avg)") +
+  xlab("") +
+  #ggtitle("National COVID-19 Deaths: Actual vs Prediction") +
+  theme(legend.title = element_blank(), panel.grid.minor = element_blank()) +
+  scale_color_manual(values=c(plotly_colors[2], plotly_colors[8]))
+
+#Clean Up
+gc()
+```
+
+```{r SHAP analysis}
+#Reference
+#https://liuyanguu.github.io/post/2019/07/18/visualization-of-shap-for-xgboost/
+  
+# Step 1: Select some observations
+X <- data.matrix(train_x[sample(nrow(train_x), 10000), ])
+
+# Step 2: Crunch SHAP values
+shap <- shap.prep(fit_xgb_cases, X_train = X, top_n = 25)
+
+# Step 3: SHAP importance
+shap.plot.summary(shap)
+```
+
+```{r EIX}
+#Cases Interactions
+cases_interactions <- interactions(fit_xgb_cases_watch, dtrain, option = "interactions")
+head(cases_interactions)
+ci_df <- data.frame(cases_interactions)
+
+#Deaths Interactions
+deaths_interactions <- interactions(fit_xgb_deaths_watch, dtrain_deaths, option = "interactions")
+head(deaths_interactions)
+di_df <- data.frame(deaths_interactions)
+
+#Table Interactions for Cases
+data.frame(cases_interactions) %>%
+  gt()
+```
+
+```{r mental health}
+#Cases - ggscatterstats
+final_df %>%
+  dplyr::filter(year(date) == 2021) %>%
+  group_by(fips) %>%
+  summarise(average_number_of_mentally_unhealthy_days = mean(average_number_of_mentally_unhealthy_days),
+            annual_cases_per100k = sum(daily_cases) / mean(population) * 100000) %>%
+  dplyr::mutate(outlier = quantile(annual_cases_per100k, .99)) %>%
+  dplyr::filter(annual_cases_per100k < outlier & annual_cases_per100k >= 0) %>%
+  ggscatterstats(
+    x     = average_number_of_mentally_unhealthy_days,
+    y     = annual_cases_per100k,
+    xlab  = "Avg # of Mentally Unhealthy Days",
+    ylab  = "Annual Cases Per 100k",
+    #title = "COVID-19 Cases and Mental Health",
+    point.args = list(color = plotly_colors[1]),
+    xsidehistogram.args = list(fill = plotly_colors[8], color = plotly_colors[1]),
+    ysidehistogram.args = list(fill = plotly_colors[8], color = plotly_colors[1]),
+    smooth.line.args = list(color = plotly_colors[8], method = "lm"),
+    ggtheme = theme_ipsum(base_family = "Futura Medium")
+) +
+  scale_ysidex_continuous(labels = NULL, minor_breaks = NULL) +
+  scale_xsidey_continuous(labels = NULL, minor_breaks = NULL) +
+  scale_y_continuous(labels = scales::number_format(accuracy = 1, big.mark = ",")) +
+  theme(panel.grid.minor = element_blank())
+
+#Deaths - ggscatterstats
+final_df %>%
+  dplyr::filter(year(date) == 2021) %>%
+  group_by(fips) %>%
+  summarise(average_number_of_mentally_unhealthy_days = mean(average_number_of_mentally_unhealthy_days),
+            annual_deaths_per100k = sum(daily_deaths) / mean(population) * 100000) %>%
+  dplyr::mutate(outlier = quantile(annual_deaths_per100k, .99)) %>%
+  dplyr::filter(annual_deaths_per100k < outlier & annual_deaths_per100k >= 0) %>%
+  ggscatterstats(
+    x     = average_number_of_mentally_unhealthy_days,
+    y     = annual_deaths_per100k,
+    xlab  = "Avg # of Mentally Unhealthy Days",
+    ylab  = "Annual Deaths Per 100k",
+    #title = "COVID-19 Deaths and Mental Health",
+    point.args = list(color = plotly_colors[2]),
+    xsidehistogram.args = list(fill = plotly_colors[8], color = plotly_colors[2]),
+    ysidehistogram.args = list(fill = plotly_colors[8], color = plotly_colors[2]),
+    smooth.line.args = list(color = plotly_colors[8], method = "lm"),
+    ggtheme = theme_ipsum(base_family = "Futura Medium")
+) +
+  scale_ysidex_continuous(labels = NULL, minor_breaks = NULL) +
+  scale_xsidey_continuous(labels = NULL, minor_breaks = NULL) +
+  theme(panel.grid.minor = element_blank())
+
+#Cluster for Spaghetti Chart - Cases
+mh_df <- final_df %>%
+  select(date, daily_cases, population, average_number_of_mentally_unhealthy_days) %>%
+  dplyr::mutate(bucket = cut(average_number_of_mentally_unhealthy_days,
+                             breaks=c(quantile(average_number_of_mentally_unhealthy_days, probs = seq(0, 1, by = .25))), 
+      labels=c("0%-25%","25%-50%","50%-75%","75%-100%"), include.lowest=TRUE)) %>%
+  group_by(date, bucket) %>%
+  summarise(daily_cases = sum(daily_cases), population = sum(population)) %>%
+  ungroup() %>%
+  group_by(bucket) %>%
+  dplyr::mutate(cases_7dayavg_per100k = roll_mean(daily_cases, n = 7, align = "right", fill = 0)/population*100000, bucket2=bucket) %>%
+  ungroup() %>%
+  dplyr::filter(year(date) == 2021)
+
+ggplot(data=mh_df, aes(x=date, y=cases_7dayavg_per100k)) +
+  geom_line(data=mh_df %>% dplyr::select(-bucket), aes(group=bucket2), color="grey", size=0.5, alpha=0.5) +
+  geom_line(aes(color=bucket), color=plotly_colors[1], size=1.2)+
+  scale_color_viridis(discrete = T) +
+  theme_ipsum(base_family = "Futura Medium") +
+  theme(
+    legend.position="none",
+    plot.title = element_text(size=14),
+    panel.grid.minor = element_blank()
+  ) +
+  #ggtitle("COVID-19 Cases by Mental Health Quartiles") +
+  ylab("Cases Per 100k (7 Day Avg)") +
+  xlab("") +
+  facet_wrap(~bucket)
+
+#Cluster for Spaghetti Chart - Deaths
+mh_deaths_df <- final_df %>%
+  select(date, daily_deaths, population, average_number_of_mentally_unhealthy_days) %>%
+  dplyr::mutate(bucket = cut(average_number_of_mentally_unhealthy_days,
+                             breaks=c(quantile(average_number_of_mentally_unhealthy_days, probs = seq(0, 1, by = .25))), 
+      labels=c("0%-25%","25%-50%","50%-75%","75%-100%"), include.lowest=TRUE)) %>%
+  group_by(date, bucket) %>%
+  summarise(daily_deaths = sum(daily_deaths), population = sum(population)) %>%
+  ungroup() %>%
+  group_by(bucket) %>%
+  dplyr::mutate(deaths_7dayavg_per100k = roll_mean(daily_deaths, n = 7, align = "right", fill = 0)/population*100000, bucket2=bucket) %>%
+  ungroup() %>%
+  dplyr::filter(year(date) == 2021)
+
+ggplot(data=mh_deaths_df, aes(x=date, y=deaths_7dayavg_per100k)) +
+  geom_line(data=mh_deaths_df %>% dplyr::select(-bucket), aes(group=bucket2), color="grey", size=0.5, alpha=0.5) +
+  geom_line(aes(color=bucket), color=plotly_colors[2], size=1.2)+
+  scale_color_viridis(discrete = T) +
+  theme_ipsum(base_family = "Futura Medium") +
+  theme(
+    legend.position="none",
+    plot.title = element_text(size=14),
+    panel.grid.minor = element_blank()
+  ) +
+  #ggtitle("COVID-19 Deaths by Mental Health Quartiles") +
+  ylab("Deaths Per 100k (7 Day Avg)") +
+  xlab("") +
+  facet_wrap(~bucket)
+```
+
+```{r physical health}
+#Cases - ggscatterstats
+final_df %>%
+  dplyr::filter(year(date) == 2021) %>%
+  group_by(fips) %>%
+  summarise(average_number_of_physically_unhealthy_days = mean(average_number_of_physically_unhealthy_days),
+            annual_cases_per100k = sum(daily_cases) / mean(population) * 100000) %>%
+  dplyr::mutate(outlier = quantile(annual_cases_per100k, .99)) %>%
+  dplyr::filter(annual_cases_per100k < outlier & annual_cases_per100k >= 0) %>%
+  ggscatterstats(
+    x     = average_number_of_physically_unhealthy_days,
+    y     = annual_cases_per100k,
+    xlab  = "Avg # of Physically Unhealthy Days",
+    ylab  = "Annual Cases Per 100k",
+    #title = "COVID-19 Cases and Physical Health",
+    point.args = list(color = plotly_colors[1]),
+    xsidehistogram.args = list(fill = plotly_colors[8], color = plotly_colors[1]),
+    ysidehistogram.args = list(fill = plotly_colors[8], color = plotly_colors[1]),
+    smooth.line.args = list(color = plotly_colors[8], method = "lm"),
+    ggtheme = theme_ipsum(base_family = "Futura Medium")
+) +
+  scale_ysidex_continuous(labels = NULL, minor_breaks = NULL) +
+  scale_xsidey_continuous(labels = NULL, minor_breaks = NULL) +
+  scale_y_continuous(labels = scales::number_format(accuracy = 1, big.mark = ","))
+
+#Deaths - ggscatterstats
+final_df %>%
+  dplyr::filter(year(date) == 2021) %>%
+  group_by(fips) %>%
+  summarise(average_number_of_physically_unhealthy_days = mean(average_number_of_physically_unhealthy_days),
+            annual_deaths_per100k = sum(daily_deaths) / mean(population) * 100000) %>%
+  dplyr::mutate(outlier = quantile(annual_deaths_per100k, .99)) %>%
+  dplyr::filter(annual_deaths_per100k < outlier & annual_deaths_per100k >= 0) %>%
+  ggscatterstats(
+    x     = average_number_of_physically_unhealthy_days,
+    y     = annual_deaths_per100k,
+    xlab  = "Avg # of Physically Unhealthy Days",
+    ylab  = "Annual Deaths Per 100k",
+    #title = "COVID-19 Deaths and Physical Health",
+    point.args = list(color = plotly_colors[2]),
+    xsidehistogram.args = list(fill = plotly_colors[8], color = plotly_colors[2]),
+    ysidehistogram.args = list(fill = plotly_colors[8], color = plotly_colors[2]),
+    smooth.line.args = list(color = plotly_colors[8], method = "lm"),
+    ggtheme = theme_ipsum(base_family = "Futura Medium")
+) +
+  scale_ysidex_continuous(labels = NULL, minor_breaks = NULL) +
+  scale_xsidey_continuous(labels = NULL, minor_breaks = NULL)
+
+#Physical / Mental Health - ggscatterstats
+final_df %>%
+  dplyr::filter(year(date) == 2021) %>%
+  group_by(fips) %>%
+  summarise(average_number_of_physically_unhealthy_days = mean(average_number_of_physically_unhealthy_days),
+            average_number_of_mentally_unhealthy_days = mean(average_number_of_mentally_unhealthy_days)) %>%
+  ggscatterstats(
+    x     = average_number_of_physically_unhealthy_days,
+    y     = average_number_of_mentally_unhealthy_days,
+    xlab  = "Avg # of Physically Unhealthy Days",
+    ylab  = "Avg # of Mentally Unhealthy Days",
+    #title = "Mental and Physical Health",
+    point.args = list(color = plotly_colors[3]),
+    xsidehistogram.args = list(fill = plotly_colors[8], color = plotly_colors[3]),
+    ysidehistogram.args = list(fill = plotly_colors[8], color = plotly_colors[3]),
+    smooth.line.args = list(color = plotly_colors[8], method = "lm"),
+    ggtheme = theme_ipsum(base_family = "Futura Medium")
+) +
+  scale_ysidex_continuous(labels = NULL, minor_breaks = NULL) +
+  scale_xsidey_continuous(labels = NULL, minor_breaks = NULL) +
+  theme(panel.grid.minor = element_blank())
+
+#Cluster for Spaghetti Chart - Cases
+ph_cases_df <- final_df %>%
+  select(date, daily_cases, population, average_number_of_physically_unhealthy_days) %>%
+  dplyr::mutate(bucket = cut(average_number_of_physically_unhealthy_days,
+                             breaks=c(quantile(average_number_of_physically_unhealthy_days, probs = seq(0, 1, by = .25))), 
+      labels=c("0%-25%","25%-50%","50%-75%","75%-100%"), include.lowest=TRUE)) %>%
+  group_by(date, bucket) %>%
+  summarise(daily_cases = sum(daily_cases), population = sum(population)) %>%
+  ungroup() %>%
+  group_by(bucket) %>%
+  dplyr::mutate(cases_7dayavg_per100k = roll_mean(daily_cases, n = 7, align = "right", fill = 0)/population*100000, bucket2=bucket) %>%
+  ungroup() %>%
+  dplyr::filter(year(date) == 2021)
+
+ggplot(data=ph_cases_df, aes(x=date, y=cases_7dayavg_per100k)) +
+  geom_line(data=ph_cases_df %>% dplyr::select(-bucket), aes(group=bucket2), color="grey", size=0.5, alpha=0.5) +
+  geom_line(aes(color=bucket), color=plotly_colors[1], size=1.2)+
+  scale_color_viridis(discrete = T) +
+  theme_ipsum(base_family = "Futura Medium") +
+  theme(
+    legend.position="none",
+    plot.title = element_text(size=14),
+    panel.grid.minor = element_blank()
+  ) +
+  #ggtitle("COVID-19 Cases by Physical Health Quartiles") +
+  ylab("Cases Per 100k (7 Day Avg)") +
+  xlab("") +
+  facet_wrap(~bucket)
+
+#Cluster for Spaghetti Chart - Deaths
+ph_deaths_df <- final_df %>%
+  select(date, daily_deaths, population, average_number_of_physically_unhealthy_days) %>%
+  dplyr::mutate(bucket = cut(average_number_of_physically_unhealthy_days,
+                             breaks=c(quantile(average_number_of_physically_unhealthy_days, probs = seq(0, 1, by = .25))), 
+      labels=c("0%-25%","25%-50%","50%-75%","75%-100%"), include.lowest=TRUE)) %>%
+  group_by(date, bucket) %>%
+  summarise(daily_deaths = sum(daily_deaths), population = sum(population)) %>%
+  ungroup() %>%
+  group_by(bucket) %>%
+  dplyr::mutate(deaths_7dayavg_per100k = roll_mean(daily_deaths, n = 7, align = "right", fill = 0)/population*100000, bucket2=bucket) %>%
+  ungroup() %>%
+  dplyr::filter(year(date) == 2021)
+
+ggplot(data=ph_deaths_df, aes(x=date, y=deaths_7dayavg_per100k)) +
+  geom_line(data=ph_deaths_df %>% dplyr::select(-bucket), aes(group=bucket2), color="grey", size=0.5, alpha=0.5) +
+  geom_line(aes(color=bucket), color=plotly_colors[2], size=1.2)+
+  scale_color_viridis(discrete = T) +
+  theme_ipsum(base_family = "Futura Medium") +
+  theme(
+    legend.position="none",
+    plot.title = element_text(size=14),
+    panel.grid.minor = element_blank()
+  ) +
+  #ggtitle("COVID-19 Deaths by Physical Health Quartiles") +
+  ylab("Deaths Per 100k (7 Day Avg)") +
+  xlab("") +
+  facet_wrap(~bucket)
+```
+
+```{r mental_physical_health_cluster}
+#Create dataframe
+mental_physical_health_df <- final_df %>%
+  dplyr::filter(year(date) == 2021) %>%
+  group_by(fips) %>%
+  dplyr::summarise(total_cases = sum(daily_cases),
+                   total_deaths = sum(daily_deaths),
+                   population = mean(population),
+                   density = mean(density),
+                   average_number_of_physically_unhealthy_days = mean(average_number_of_physically_unhealthy_days),
+                   average_number_of_mentally_unhealthy_days = mean(average_number_of_mentally_unhealthy_days),
+                   Poverty = mean(Poverty),
+                   ChildPoverty = mean(ChildPoverty),
+                   percent_children_in_poverty = mean(percent_children_in_poverty),
+                   median_household_income = mean(median_household_income),
+                   Income = mean(Income),
+                   IncomePerCap = mean(IncomePerCap)) %>%
+  ungroup() %>%
+  dplyr::mutate(deaths_per_100k = round(total_deaths/population*100000),
+                cases_per_100k = round(total_cases/population*100000)) %>%
+  select(-fips, -total_deaths, -total_cases)
+
+#Normalize
+z_mntl_phy <- mental_physical_health_df
+means_mntl_phy <- base::apply(z_mntl_phy,2,mean)
+sds_mntl_phy <- base::apply(z_mntl_phy,2,sd)
+nor_mntl_phy <- base::scale(z_mntl_phy,center=means_mntl_phy,scale=sds_mntl_phy)
+
+#Silhouette
+fviz_nbclust(nor_mntl_phy, kmeans, method = "silhouette", linecolor = plotly_colors[3]) +
+  theme(text = element_text(family = "Futura Medium"))
+
+#Cluster
+mental_physical_health_cluster <- kmeans(nor_mntl_phy, centers = 2)
+mental_physical_health_df <- mental_physical_health_df %>%
+  add_column(cluster = mental_physical_health_cluster$cluster)
+
+#ggbetweenstats
+ggbetweenstats(
+  data    = mental_physical_health_df,
+  x       = cluster,
+  y       = deaths_per_100k,
+  #title   = "ADI/SDoH Health Care Clusters",
+  caption = "",
+  ggtheme = theme_ipsum(base_family = "Futura Medium"),
+  centrality.point.args = list(color = plotly_colors[8], size = 4),
+  palette = "Accent"
+) +
+  scale_y_continuous(labels = scales::number_format(big.mark = ",")) +
+  theme(panel.grid.minor = element_blank())
+
+ggbetweenstats(
+  data    = mental_physical_health_df,
+  x       = cluster,
+  y       = cases_per_100k,
+  #title   = "ADI/SDoH Health Care Clusters",
+  caption = "",
+  ggtheme = theme_ipsum(base_family = "Futura Medium"),
+  centrality.point.args = list(color = plotly_colors[8], size = 4),
+  palette = "Accent"
+) +
+  scale_y_continuous(labels = scales::number_format(big.mark = ",")) +
+  theme(panel.grid.minor = element_blank())
+
+#Table
+mental_physical_health_df %>%
+  tbl_summary(by=cluster) %>%
+  as_gt() %>%
+  tab_options(table.font.names = "Futura")
+```
+
+```{r adi_sdoh_economic}
+#Create dataframe
+adi_sdoh_economic <- final_df %>%
+  dplyr::filter(year(date) == 2021) %>%
+  select(fips, daily_deaths, contains("pct_m"), DEMOCRAT, OTHER, REPUBLICAN, GREEN, LIBERTARIAN, contains("income"), population, density) %>%
+  group_by(fips) %>%
+  summarise(total_deaths = sum(daily_deaths),
+            REPUBLICAN = mean(REPUBLICAN),
+            LIBERTARIAN = mean(LIBERTARIAN),
+            OTHER = mean(OTHER),
+            GREEN = mean(GREEN),
+            DEMOCRAT = mean(DEMOCRAT),
+            conpct_m = mean(conpct_m),
+            modpct_m = mean(modpct_m),
+            libpct_m = mean(libpct_m),
+            reppct_m = mean(reppct_m),
+            indpct_m = mean(indpct_m),
+            dempct_m = mean(dempct_m),
+            Income = mean(Income),
+            IncomePerCap = mean(IncomePerCap),
+            income_ratio = mean(income_ratio),
+            median_household_income = mean(median_household_income),
+            population = mean(population),
+            density = mean(density)) %>%
+  ungroup() %>%
+  dplyr::mutate(deaths_per_100k = round(total_deaths/population*100000)) %>%
+  select(-fips, -population) %>%
+  dplyr::filter(total_deaths > 0)
+
+#Normalize
+z <- adi_sdoh_economic
+means <- base::apply(z,2,mean)
+sds <- base::apply(z,2,sd)
+nor <- base::scale(z,center=means,scale=sds)
+
+#Silhouette
+fviz_nbclust(nor, kmeans, method = "silhouette", linecolor = plotly_colors[2]) +
+  theme(text = element_text(family = "Futura Medium"))
+
+#Cluster
+adi_sdoh_economic_cluster <- kmeans(nor, centers = 2)
+adi_sdoh_economic <- adi_sdoh_economic %>%
+  add_column(cluster = adi_sdoh_economic_cluster$cluster)
+
+#ggbetweenstats
+ggbetweenstats(
+  data    = adi_sdoh_economic,
+  x       = cluster,
+  y       = deaths_per_100k,
+  title   = "Political Affiliation & Income Clusters",
+  caption = "",
+  ggtheme = theme_ipsum(base_family = "Futura Medium"),
+  centrality.point.args = list(color = plotly_colors[8], size = 4),
+  palette = "Accent"
+) +
+  theme(panel.grid.minor = element_blank())
+
+#Table
+adi_sdoh_economic %>%
+  tbl_summary(by=cluster) %>%
+  as_gt() %>%
+  tab_options(table.font.names = "Futura")
+```
+
+```{r adi_sdoh education}
+#Summary Stats by Bucket (HS & Cases)
+final_df %>%
+  dplyr::filter(year(date) == 2021) %>%
+  group_by(fips) %>%
+  dplyr::summarise(total_cases = sum(daily_cases),
+                   population = mean(population),
+                   density = mean(density),
+                   hs_or_more = mean(hs_or_more),
+                   high_school_graduation_rate = mean(high_school_graduation_rate),
+                   percent_of_adults_with_a_high_school_diploma_only_2015_19 = mean(percent_of_adults_with_a_high_school_diploma_only_2015_19),
+                   temperature = mean(temperature),
+                   temperature_lag_1mo = mean(temperature_lag_1mo)) %>%
+  ungroup() %>%
+  dplyr::mutate(cases_per_100k = round(total_cases/population*100000)) %>%
+  mutate(bucket = ifelse(hs_or_more >= median(hs_or_more) & cases_per_100k >= median(cases_per_100k), "HS-High / Cases-High",
+                  ifelse(hs_or_more >= median(hs_or_more) & cases_per_100k < median(cases_per_100k), "HS-High / Cases-Low",
+                  ifelse(hs_or_more < median(hs_or_more) & cases_per_100k >= median(cases_per_100k), "HS-Low / Cases-High", "HS-Low / Cases-Low")))) %>%
+  select(bucket, population, density, hs_or_more, high_school_graduation_rate, percent_of_adults_with_a_high_school_diploma_only_2015_19, temperature, temperature_lag_1mo, cases_per_100k) %>%
+  tbl_summary(by=bucket) %>%
+  as_gt() %>%
+  tab_options(table.font.names = "Futura")
+
+#Summary Stats by Bucket (Temp & Cases)
+final_df %>%
+  dplyr::filter(year(date) == 2021) %>%
+  group_by(fips) %>%
+  dplyr::summarise(total_cases = sum(daily_cases),
+                   population = mean(population),
+                   density = mean(density),
+                   hs_or_more = mean(hs_or_more),
+                   high_school_graduation_rate = mean(high_school_graduation_rate),
+                   percent_of_adults_with_a_high_school_diploma_only_2015_19 = mean(percent_of_adults_with_a_high_school_diploma_only_2015_19),
+                   temperature = mean(temperature),
+                   temperature_lag_1mo = mean(temperature_lag_1mo)) %>%
+  ungroup() %>%
+  dplyr::mutate(cases_per_100k = round(total_cases/population*100000)) %>%
+  mutate(bucket = ifelse(temperature_lag_1mo >= median(temperature_lag_1mo) & cases_per_100k >= median(cases_per_100k), "Temp-High / Cases-High",
+                  ifelse(temperature_lag_1mo >= median(temperature_lag_1mo) & cases_per_100k < median(cases_per_100k), "Temp-High / Cases-Low",
+                  ifelse(temperature_lag_1mo < median(temperature_lag_1mo) & cases_per_100k >= median(cases_per_100k), "Temp-Low / Cases-High", "Temp-Low / Cases-Low")))) %>%
+  select(bucket, population, density, hs_or_more, high_school_graduation_rate, percent_of_adults_with_a_high_school_diploma_only_2015_19, temperature, temperature_lag_1mo, cases_per_100k) %>%
+  tbl_summary(by=bucket) %>%
+  as_gt() %>%
+  tab_options(table.font.names = "Futura")
+
+#Create Dataframe for Map
+adi_sdoh_education <- final_df %>%
+  dplyr::filter(year(date) == 2021) %>%
+  select(daily_cases, fips, population, hs_or_more) %>%
+  group_by(fips) %>%
+  dplyr::summarise(total_cases = sum(daily_cases), population = mean(population), hs_or_more = mean(hs_or_more)) %>%
+  ungroup() %>%
+  dplyr::mutate(cases_per_100k = round(total_cases/population*100000)) %>%
+  mutate(bucket = ifelse(hs_or_more >= median(hs_or_more) & cases_per_100k >= median(cases_per_100k), "HS-High / Cases-High",
+                  ifelse(hs_or_more >= median(hs_or_more) & cases_per_100k < median(cases_per_100k), "HS-High / Cases-Low",
+                  ifelse(hs_or_more < median(hs_or_more) & cases_per_100k >= median(cases_per_100k), "HS-Low / Cases-High", "HS-Low / Cases-Low")))) %>%
+  inner_join(
+    us_counties %>% select(fips, long, lat, group, order), by=c("fips")
+  )
+
+#Plot Cases by County
+ggplot(data = adi_sdoh_education, mapping = aes(x = long, y = lat, group = group)) +
+  geom_polygon(color="gray", size = .15, aes(fill = bucket)) +
+  geom_path(data = state_map , colour = "black") +
+  labs(title = "",
+       subtitle = "",
+       caption = "") +
+  theme_ipsum(base_family = "Futura Medium") +
+  scale_fill_manual(values = c("#0f3957", "#1e72ae", "#51a5e1", "#a8d2f0")) +
+  theme(axis.line=element_blank(),
+        axis.text.x = element_blank(),
+        axis.title.x = element_blank(),
+        axis.text.y = element_blank(),
+        axis.title.y = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.ticks=element_blank(),
+        axis.title=element_blank(),
+        panel.background=element_blank(),
+        panel.border=element_blank(),
+        panel.grid=element_blank(),
+        legend.title = element_blank())
+```
+
+```{r adi_sdoh_health_care}
+#Create Dataframe
+adi_sdoh_health_care <- final_df %>%
+  dplyr::filter(year(date) == 2021) %>%
+  group_by(fips) %>%
+  dplyr::summarise(total_cases = sum(daily_cases),
+                   total_deaths = sum(daily_deaths),
+                   population = mean(population),
+                   density = mean(density),
+                   teen_birth_per1k = mean(teen_birth_per1k),
+                   percent_low_birthweight = mean(percent_low_birthweight)) %>%
+  ungroup() %>%
+  dplyr::mutate(deaths_per_100k = round(total_deaths/population*100000),
+                cases_per_100k = round(total_cases/population*100000)) %>%
+  select(-fips, -total_deaths, -total_cases)
+
+#Normalize
+z_hc <- adi_sdoh_health_care
+means_hc <- base::apply(z_hc,2,mean)
+sds_hc <- base::apply(z_hc,2,sd)
+nor_hc <- base::scale(z_hc,center=means_hc,scale=sds_hc)
+
+#Silhouette
+fviz_nbclust(nor_hc, kmeans, method = "silhouette", linecolor = plotly_colors[3]) +
+  theme(text = element_text(family = "Futura Medium"))
+
+#Cluster
+adi_sdoh_health_care_cluster <- kmeans(nor_hc, centers = 4)
+adi_sdoh_health_care <- adi_sdoh_health_care %>%
+  add_column(cluster = adi_sdoh_health_care_cluster$cluster)
+
+#ggbetweenstats
+ggbetweenstats(
+  data    = adi_sdoh_health_care,
+  x       = cluster,
+  y       = deaths_per_100k,
+  #title   = "ADI/SDoH Health Care Clusters",
+  caption = "",
+  ggtheme = theme_ipsum(base_family = "Futura Medium"),
+  centrality.point.args = list(color = plotly_colors[8], size = 4),
+  palette = "Accent"
+) +
+  scale_y_continuous(labels = scales::number_format(big.mark = ",")) +
+  theme(panel.grid.minor = element_blank())
+
+ggbetweenstats(
+  data    = adi_sdoh_health_care,
+  x       = cluster,
+  y       = cases_per_100k,
+  #title   = "ADI/SDoH Health Care Clusters",
+  caption = "",
+  ggtheme = theme_ipsum(base_family = "Futura Medium"),
+  centrality.point.args = list(color = plotly_colors[8], size = 4),
+  palette = "Accent"
+) +
+  scale_y_continuous(labels = scales::number_format(big.mark = ",")) +
+  theme(panel.grid.minor = element_blank())
+
+#Table
+adi_sdoh_health_care %>%
+  tbl_summary(by=cluster) %>%
+  as_gt() %>%
+  tab_options(table.font.names = "Futura")
+```
+
+```{r adi_sdoh neighborhood}
+#Create Dataframe
+adi_sdoh_neighborhood <- final_df %>%
+  dplyr::filter(year(date) == 2021) %>%
+  dplyr::group_by(fips) %>%
+  dplyr::summarise(total_cases = sum(daily_cases),
+                   total_deaths = sum(daily_deaths),
+                   population = mean(population),
+                   adi = mean(adi),
+                   government_response_index = mean(abs(government_response_index)),
+                   smokers12 = mean(smokers12),
+                   percent_smokers = mean(percent_smokers),
+                   cigarettes = mean(cigarettes),
+                   cig_tax12 = mean(cig_tax12),
+                   cig_tax = mean(cig_tax)) %>%
+  ungroup() %>%
+  dplyr::mutate(deaths_per_100k = round(total_deaths/population*100000),
+                cases_per_100k = round(total_cases/population*100000)) %>%
+  select(-fips, -total_deaths, -total_cases)
+
+#Normalize
+z_neighbor <- adi_sdoh_health_care
+means_neighbor <- base::apply(z_neighbor,2,mean)
+sds_neighbor <- base::apply(z_neighbor,2,sd)
+nor_neighbor <- base::scale(z_neighbor,center=means_neighbor,scale=sds_neighbor)
+
+#Silhouette
+fviz_nbclust(nor_neighbor, kmeans, method = "silhouette", linecolor = plotly_colors[3]) +
+  theme(text = element_text(family = "Futura Medium"))
+
+#Cluster
+adi_sdoh_neighborhood_cluster <- kmeans(nor_neighbor, centers = 4)
+adi_sdoh_neighborhood <- adi_sdoh_neighborhood %>%
+  add_column(cluster = adi_sdoh_neighborhood_cluster$cluster)
+
+#ggbetweenstats
+ggbetweenstats(
+  data    = adi_sdoh_neighborhood,
+  x       = cluster,
+  y       = deaths_per_100k,
+  #title   = "ADI/SDoH Neighborhood Clusters",
+  caption = "",
+  ggtheme = theme_ipsum(base_family = "Futura Medium"),
+  centrality.point.args = list(color = plotly_colors[8], size = 4),
+  palette = "Accent"
+) +
+  scale_y_continuous(labels = scales::number_format(big.mark = ",")) +
+  theme(panel.grid.minor = element_blank())
+
+ggbetweenstats(
+  data    = adi_sdoh_neighborhood,
+  x       = cluster,
+  y       = cases_per_100k,
+  #title   = "ADI/SDoH Neighborhood Clusters",
+  caption = "",
+  ggtheme = theme_ipsum(base_family = "Futura Medium"),
+  centrality.point.args = list(color = plotly_colors[8], size = 4),
+  palette = "Accent"
+) +
+  scale_y_continuous(labels = scales::number_format(big.mark = ",")) +
+  theme(panel.grid.minor = element_blank())
+
+#Table
+adi_sdoh_neighborhood %>%
+  tbl_summary(by=cluster) %>%
+  as_gt() %>%
+  tab_options(table.font.names = "Futura")
+
+#Bar
+final_df %>%
+  dplyr::filter(year(date) == 2021) %>%
+  dplyr::group_by(fips, month) %>%
+  dplyr::summarise(total_cases = sum(daily_cases),
+                   total_deaths = sum(daily_deaths),
+                   population = mean(population),
+                   cig_tax = mean(cig_tax)) %>%
+  ungroup() %>%
+  dplyr::mutate(deaths_per_100k = round(total_deaths/population*100000),
+                cases_per_100k = round(total_cases/population*100000)) %>%
+  select(-fips, -total_deaths, -total_cases) %>%
+  mutate(cig_tax_bucket = cut_number(cig_tax, 2)) %>%
+  group_by(month, cig_tax_bucket) %>%
+  summarise(deaths_per_100k = sum(deaths_per_100k),
+            cases_per_100k = sum(cases_per_100k)) %>%
+  ungroup() %>%
+  ggplot(aes(x=month, y=deaths_per_100k)) +
+    geom_bar(aes(fill = cig_tax_bucket), position = "dodge", stat="identity") +
+    theme_ipsum(base_family = "Futura Medium") +
+    theme(axis.title.x = element_blank(), axis.title.y = element_blank(),
+          panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+          legend.title = element_blank()) +
+    scale_y_continuous(labels = scales::number_format(big.mark = ",")) +
+    scale_fill_manual(values = c(plotly_colors[2], plotly_colors[3])) +
+    ggtitle("COVID-19 Deaths Per 100k", subtitle = "Grouped by Cigarette Tax Per Pack") +
+
+final_df %>%
+  dplyr::filter(year(date) == 2021) %>%
+  dplyr::group_by(fips, month) %>%
+  dplyr::summarise(total_cases = sum(daily_cases),
+                   total_deaths = sum(daily_deaths),
+                   population = mean(population),
+                   cigarettes = mean(cigarettes)) %>%
+  ungroup() %>%
+  dplyr::mutate(deaths_per_100k = round(total_deaths/population*100000),
+                cases_per_100k = round(total_cases/population*100000)) %>%
+  select(-fips, -total_deaths, -total_cases) %>%
+  mutate(cig_bucket = cut_number(cigarettes, 2)) %>%
+  group_by(month, cig_bucket) %>%
+  summarise(deaths_per_100k = sum(deaths_per_100k),
+            cases_per_100k = sum(cases_per_100k)) %>%
+  ungroup() %>%
+  ggplot(aes(x=month, y=deaths_per_100k)) +
+    geom_bar(aes(fill = cig_bucket), position = "dodge", stat="identity") +
+    theme_ipsum(base_family = "Futura Medium") +
+    theme(axis.title.x = element_blank(), axis.title.y = element_blank(),
+          panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+          legend.title = element_blank()) +
+    scale_y_continuous(labels = scales::number_format(big.mark = ",")) +
+    scale_fill_manual(values = c(plotly_colors[2], plotly_colors[3])) +
+    ggtitle("COVID-19 Deaths Per 100k", subtitle = "Grouped by Cigarette Packs Smoked Bimonthly Per Adult")
+```
+
+```{r adi_sdoh_social}
+#Create Dataframe
+adi_sdoh_social <- final_df %>%
+  dplyr::filter(year(date) == 2021) %>%
+  dplyr::group_by(fips) %>%
+  dplyr::summarise(total_cases = sum(daily_cases),
+                   total_deaths = sum(daily_deaths),
+                   population = mean(population),
+                   food_environment_index = mean(food_environment_index),
+                   percent_food_insecure = mean(percent_food_insecure),
+                   percent_limited_access_to_healthy_foods = mean(percent_limited_access_to_healthy_foods),
+                   temperature = mean(temperature),
+                   precipitation = mean(precipitation)) %>%
+  ungroup() %>%
+  dplyr::mutate(deaths_per_100k = round(total_deaths/population*100000),
+                cases_per_100k = round(total_cases/population*100000)) %>%
+  select(-fips, -total_deaths, -total_cases)
+
+#Normalize
+z_social <- adi_sdoh_social
+means_social <- base::apply(z_social,2,mean)
+sds_social <- base::apply(z_social,2,sd)
+nor_social <- base::scale(z_social,center=means_social,scale=sds_social)
+
+#Silhouette
+fviz_nbclust(nor_social, kmeans, method = "silhouette", linecolor = plotly_colors[3]) +
+  theme(text = element_text(family = "Futura Medium"))
+
+#Cluster
+adi_sdoh_social_cluster <- kmeans(nor_social, centers = 2)
+adi_sdoh_social <- adi_sdoh_social %>%
+  add_column(cluster = adi_sdoh_social_cluster$cluster)
+
+#ggbetweenstats
+ggbetweenstats(
+  data    = adi_sdoh_social,
+  x       = cluster,
+  y       = deaths_per_100k,
+  title   = "ADI/SDoH Social Clusters",
+  caption = "",
+  ggtheme = theme_ipsum(base_family = "Futura Medium"),
+  centrality.point.args = list(color = plotly_colors[8], size = 4),
+  palette = "Accent"
+) +
+  scale_y_continuous(labels = scales::number_format(big.mark = ",")) +
+  theme(panel.grid.minor = element_blank())
+
+ggbetweenstats(
+  data    = adi_sdoh_social,
+  x       = cluster,
+  y       = cases_per_100k,
+  title   = "ADI/SDoH Social Clusters",
+  caption = "",
+  ggtheme = theme_ipsum(base_family = "Futura Medium"),
+  centrality.point.args = list(color = plotly_colors[8], size = 4),
+  palette = "Accent"
+) +
+  scale_y_continuous(labels = scales::number_format(big.mark = ",")) +
+  theme(panel.grid.minor = element_blank())
+
+#Table
+adi_sdoh_social %>%
+  tbl_summary(by=cluster) %>%
+  as_gt() %>%
+  tab_options(table.font.names = "Futura")
+```
+
+```{r gov_mobility}
+#Read COVID19 package data (restrictions & policies)
+rcovid_df <- COVID19::covid19(country = "United States", level = 3, end = "2022-01-31") %>%
+  dplyr::select(date, school_closing, workplace_closing, cancel_events, gatherings_restrictions, transport_closing, stay_home_restrictions, internal_movement_restrictions, international_movement_restrictions, testing_policy, contact_tracing, facial_coverings, vaccination_policy, elderly_people_protection, key_local, government_response_index, stringency_index, containment_health_index, economic_support_index) %>%
+  dplyr::mutate(across(c(-date, -key_local), abs)) %>%
+  fill(everything(), .direction = "downup")
+
+#Mobility
+apple_mobility_cty_df <- read_parquet("../Data/apple_mobility_cty_df.parquet") %>%
+  mutate(across(c(-fips, -date), div100_1))
+mobility_df <- read_parquet("../Data/mobility_df.parquet")
+
+#Merge
+gov_mobility_df <- apple_mobility_cty_df %>%
+  inner_join(
+    mobility_df %>% mutate(date = as.Date(date))
+  ) %>%
+  inner_join(
+    rcovid_df, by = c("fips"="key_local", "date")
+  )
+
+#Correlation
+gov_mobility_scale <- gov_mobility_df %>%
+  dplyr::filter(year(date) == 2021) %>%
+  dplyr::select_if(is.numeric)
+
+#Normalize
+means_gov_mobility <- base::apply(gov_mobility_scale,2,mean)
+sds_gov_mobility <- base::apply(gov_mobility_scale,2,sd)
+gov_mobility_scale <- base::scale(gov_mobility_scale,center=means_gov_mobility,scale=sds_gov_mobility) %>%
+  as.data.frame()
+
+#Correlation
+ggcorrmat(
+  data     = gov_mobility_scale,
+  colors   = c(plotly_colors[4], "white", plotly_colors[5]),
+  #title    = "Policy Measures & Mobility (2021)",
+  subtitle = "",
+  caption = "",
+  matrix.type = "full"
+) +
+  theme_ipsum(base_family = "Futura Medium") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1), axis.title.x = element_blank(), axis.title.y = element_blank())
+```
+
+```{r gov_mobility_model_residential}
+#Define y and x
+y_res <- "residential_percent_change_from_baseline"
+x_res <- names(gov_mobility_scale)[!grepl("baseline|apple", names(gov_mobility_scale))]
+
+set.seed(84)
+ix <- sample(nrow(gov_mobility_scale), 0.8 * nrow(gov_mobility_scale))
+
+dtrain_res <- xgb.DMatrix(data.matrix(gov_mobility_scale[ix, x_res]),
+                      label = gov_mobility_scale[ix, y_res])
+dvalid_res <- xgb.DMatrix(data.matrix(gov_mobility_scale[-ix, x_res]),
+                      label = gov_mobility_scale[-ix, y_res])
+
+# #Fit Model
+# fit_xgb_res <- xgb.train(
+#   data = dtrain_res,
+#   watchlist = list(valid = dvalid_res),
+#   early_stopping_rounds = 20,
+#   print_every_n = 100,
+#   nrounds = 1000
+# )
+# 
+# #Save Model
+# saveRDS(fit_xgb_res, "../Model/fit_xgb_res.rds")
+
+#Read Model
+fit_xgb_res <- readRDS("../Model/fit_xgb_res.rds")
+
+### SHAP Summary ###
+# Step 1: Select some observations
+X_res <- data.matrix(gov_mobility_scale[sample(nrow(gov_mobility_scale), 10000), x_res])
+
+# Step 2: Crunch SHAP values
+shap_res <- shap.prep(fit_xgb_res, X_train = X_res)
+
+# Step 3: SHAP importance
+shap.plot.summary(shap_res) +
+  theme_ipsum(base_family = "Futura Medium") +
+  theme(legend.position = "bottom", panel.grid.minor = element_blank()) +
+  ggtitle("")
+```
+
+```{r apple_walking_model}
+#Define y and x
+y_walking <- "apple_walking"
+x_walking <- names(gov_mobility_scale)[!grepl("baseline|apple", names(gov_mobility_scale))]
+
+set.seed(84)
+ix <- sample(nrow(gov_mobility_scale), 0.8 * nrow(gov_mobility_scale))
+
+dtrain_walking <- xgb.DMatrix(data.matrix(gov_mobility_scale[ix, x_walking]),
+                      label = gov_mobility_scale[ix, y_walking])
+dvalid_walking <- xgb.DMatrix(data.matrix(gov_mobility_scale[-ix, x_walking]),
+                      label = gov_mobility_scale[-ix, y_walking])
+
+# #Fit Model
+# fit_xgb_walking <- xgb.train(
+#   data = dtrain_walking,
+#   watchlist = list(valid = dvalid_walking),
+#   early_stopping_rounds = 20,
+#   print_every_n = 100,
+#   nrounds = 1000
+# )
+# 
+# #Save Model
+# saveRDS(fit_xgb_walking, "../Model/fit_xgb_walking.rds")
+
+#Read Model
+fit_xgb_walking <- readRDS("../Model/fit_xgb_walking.rds")
+
+### SHAP Summary ###
+# Step 1: Select some observations
+X_walking <- data.matrix(gov_mobility_scale[sample(nrow(gov_mobility_scale), 10000), x_walking])
+
+# Step 2: Crunch SHAP values
+shap_walking <- shap.prep(fit_xgb_walking, X_train = X_walking)
+
+# Step 3: SHAP importance
+shap.plot.summary(shap_walking) +
+  theme_ipsum(base_family = "Futura Medium") +
+  theme(legend.position = "bottom", panel.grid.minor = element_blank()) +
+  ggtitle("")
+```
+
+```{r stringency_index}
+#Create Dataframe
+stringency_cases <- final_df %>%
+  dplyr::select(fips, date, month, population, daily_cases) %>%
+  group_by(fips) %>%
+  mutate(cases_14dayavg_per100k = roll_mean(daily_cases, n = 14, align = "right", fill = 0)/population*100000) %>%
+  ungroup() %>%
+  dplyr::filter(year(date) == 2021) %>%
+  group_by(fips, month) %>%
+  dplyr::filter(date == first(date) | date == last(date)) %>%
+  dplyr::mutate(cases_14dayavg_per100k_delta = cases_14dayavg_per100k / dplyr::lag(cases_14dayavg_per100k,default=first(cases_14dayavg_per100k)) - 1) %>%
+  ungroup() %>%
+  select(-population, -daily_cases) %>%
+  inner_join(
+    final_df %>%
+      filter(year(date) == 2021) %>%
+      group_by(fips, month, stringency_index) %>%
+      tally() %>%
+      ungroup() %>%
+      group_by(fips, month) %>%
+      slice_max(order_by = n, with_ties = F) %>%
+      ungroup() %>%
+      select(fips, month, stringency_index)
+  ) %>%
+  dplyr::filter(cases_14dayavg_per100k_delta != 0) %>%
+  dplyr::select(month, stringency_index, cases_14dayavg_per100k_delta) %>%
+  mutate(stringency_index = as.character(abs(as.numeric(stringency_index)))) %>%
+  mutate(isnt_outlier = isnt_out_tukey(cases_14dayavg_per100k_delta)) %>%
+  dplyr::filter(isnt_outlier == T) %>%
+  dplyr::mutate(stringency_index = as.numeric(stringency_index))
+
+#Plot
+stringency_scatterstats_jan <- ggscatterstats(
+    data  = stringency_cases %>% dplyr::filter(month == "Jan"),
+    x     = stringency_index,
+    y     = cases_14dayavg_per100k_delta,
+    xlab  = "Stringency Index",
+    ylab  = "Monthly Change in COVID-19 Cases",
+    title = "January 2021",
+    point.args = list(color = plotly_colors[1]),
+    xsidehistogram.args = list(fill = plotly_colors[8], color = plotly_colors[1]),
+    ysidehistogram.args = list(fill = plotly_colors[8], color = plotly_colors[1]),
+    smooth.line.args = list(color = plotly_colors[8], method = "lm"),
+    ggtheme = theme_ipsum(base_family = "Futura Medium")
+) +
+  theme(panel.grid.minor = element_blank()) +
+  scale_ysidex_continuous(labels = NULL, minor_breaks = NULL) +
+  scale_xsidey_continuous(labels = NULL, minor_breaks = NULL) +
+  geom_hline(yintercept = 0) +
+  scale_y_continuous(label = scales::percent_format())
+  
+stringency_scatterstats_dec <- ggscatterstats(
+    data  = stringency_cases %>% dplyr::filter(month == "Dec"),
+    x     = stringency_index,
+    y     = cases_14dayavg_per100k_delta,
+    xlab  = "Stringency Index",
+    ylab  = "Monthly Change in COVID-19 Cases",
+    title = "December 2021",
+    point.args = list(color = plotly_colors[1]),
+    xsidehistogram.args = list(fill = plotly_colors[8], color = plotly_colors[1]),
+    ysidehistogram.args = list(fill = plotly_colors[8], color = plotly_colors[1]),
+    smooth.line.args = list(color = plotly_colors[8], method = "lm"),
+    ggtheme = theme_ipsum(base_family = "Futura Medium")
+) +
+  theme(panel.grid.minor = element_blank()) +
+  scale_ysidex_continuous(labels = NULL, minor_breaks = NULL) +
+  scale_xsidey_continuous(labels = NULL, minor_breaks = NULL) +
+  geom_hline(yintercept = 0) +
+  scale_y_continuous(label = scales::percent_format())
+
+stringency_scatterstats_jan + stringency_scatterstats_dec
+
+stringency_scatterstats_aug <- ggscatterstats(
+    data  = stringency_cases %>% dplyr::filter(month == "Aug"),
+    x     = stringency_index,
+    y     = cases_14dayavg_per100k_delta,
+    xlab  = "Stringency Index",
+    ylab  = "Monthly Change in COVID-19 Cases",
+    title = "January 2021",
+    point.args = list(color = plotly_colors[1]),
+    xsidehistogram.args = list(fill = plotly_colors[8], color = plotly_colors[1]),
+    ysidehistogram.args = list(fill = plotly_colors[8], color = plotly_colors[1]),
+    smooth.line.args = list(color = plotly_colors[8], method = "lm"),
+    ggtheme = theme_ipsum(base_family = "Futura Medium")
+) +
+  theme(panel.grid.minor = element_blank()) +
+  scale_ysidex_continuous(labels = NULL, minor_breaks = NULL) +
+  scale_xsidey_continuous(labels = NULL, minor_breaks = NULL) +
+  geom_hline(yintercept = 0) +
+  scale_y_continuous(label = scales::percent_format())
+  
+stringency_scatterstats_sep <- ggscatterstats(
+    data  = stringency_cases %>% dplyr::filter(month == "Sep"),
+    x     = stringency_index,
+    y     = cases_14dayavg_per100k_delta,
+    xlab  = "Stringency Index",
+    ylab  = "Monthly Change in COVID-19 Cases",
+    title = "December 2021",
+    point.args = list(color = plotly_colors[1]),
+    xsidehistogram.args = list(fill = plotly_colors[8], color = plotly_colors[1]),
+    ysidehistogram.args = list(fill = plotly_colors[8], color = plotly_colors[1]),
+    smooth.line.args = list(color = plotly_colors[8], method = "lm"),
+    ggtheme = theme_ipsum(base_family = "Futura Medium")
+) +
+  theme(panel.grid.minor = element_blank()) +
+  scale_ysidex_continuous(labels = NULL, minor_breaks = NULL) +
+  scale_xsidey_continuous(labels = NULL, minor_breaks = NULL) +
+  geom_hline(yintercept = 0) +
+  scale_y_continuous(label = scales::percent_format())
+
+stringency_scatterstats_aug + stringency_scatterstats_sep
+```
+
+```{r school_closing_cases}
+#Create Dataframe
+school_closing_cases <- final_df %>%
+  dplyr::select(fips, date, month, population, daily_cases) %>%
+  group_by(fips) %>%
+  mutate(cases_14dayavg_per100k = roll_mean(daily_cases, n = 14, align = "right", fill = 0)/population*100000) %>%
+  ungroup() %>%
+  dplyr::filter(year(date) == 2021) %>%
+  group_by(fips, month) %>%
+  dplyr::filter(date == first(date) | date == last(date)) %>%
+  dplyr::mutate(cases_14dayavg_per100k_delta = cases_14dayavg_per100k / dplyr::lag(cases_14dayavg_per100k,default=first(cases_14dayavg_per100k)) - 1) %>%
+  ungroup() %>%
+  select(-population, -daily_cases) %>%
+  inner_join(
+    final_df %>%
+      filter(year(date) == 2021) %>%
+      group_by(fips, month, school_closing) %>%
+      tally() %>%
+      ungroup() %>%
+      group_by(fips, month) %>%
+      slice_max(order_by = n, with_ties = F) %>%
+      ungroup() %>%
+      select(fips, month, school_closing)
+  ) %>%
+  dplyr::filter(cases_14dayavg_per100k_delta != 0) %>%
+  dplyr::select(month, school_closing, cases_14dayavg_per100k_delta) %>%
+  mutate(school_closing = as.character(abs(as.numeric(school_closing)))) %>%
+  mutate(isnt_outlier = isnt_out_tukey(cases_14dayavg_per100k_delta))
+
+#Table
+school_closing_cases %>%
+  group_by(month, school_closing) %>%
+  tally() %>%
+  reshape2::dcast(month ~ school_closing) %>%
+  replace(is.na(.), 0) %>%
+  gt() %>%
+  tab_options(table.font.names = "Futura") %>%
+  tab_spanner(
+    label = "School Closing",
+    columns = c(`0`, `1`, `2`, `3`)
+  ) %>% 
+  tab_source_note(
+    source_note = md("0 - No measures")
+  ) %>%
+  tab_source_note(
+    source_note = md("1 - Recommend closing or all schools open with alterations resulting in significant differences compared to non-Covid-19 operations")
+  ) %>% 
+  tab_source_note(
+    source_note = md("2 - Require closing (only some levels or categories; e.g. just high school or just public schools)")
+  ) %>% 
+  tab_source_note(
+    source_note = md("3 - Require closing all levels")
+  )
+
+#Plot
+(
+ggbetweenstats(
+  data = school_closing_cases %>%
+    dplyr::filter(month == "Jul" & isnt_outlier == T),
+  x = school_closing,
+  y = cases_14dayavg_per100k_delta
+) +
+  theme_ipsum(base_family = "Futura Medium") +
+  ggtitle("July") +
+  theme(legend.position = "none") +
+  scale_y_continuous(label = scales::percent_format()) +
+    
+ggbetweenstats(
+  data = school_closing_cases %>%
+    dplyr::filter(month == "Aug" & isnt_outlier == T),
+  x = school_closing,
+  y = cases_14dayavg_per100k_delta
+) +
+  theme_ipsum(base_family = "Futura Medium") +
+  ggtitle("August") +
+  theme(legend.position = "none") +
+ggbetweenstats(
+  data = school_closing_cases %>%
+    dplyr::filter(month == "Sep" & isnt_outlier == T),
+  x = school_closing,
+  y = cases_14dayavg_per100k_delta
+) +
+  theme_ipsum(base_family = "Futura Medium") +
+  ggtitle("September") +
+  theme(legend.position = "none")
+) / (
+ggbetweenstats(
+  data = school_closing_cases %>%
+    dplyr::filter(month == "Oct" & isnt_outlier == T),
+  x = school_closing,
+  y = cases_14dayavg_per100k_delta
+) +
+  theme_ipsum(base_family = "Futura Medium") +
+  ggtitle("October") +
+  theme(legend.position = "none") +
+ggbetweenstats(
+  data = school_closing_cases %>%
+    dplyr::filter(month == "Nov" & isnt_outlier == T),
+  x = school_closing,
+  y = cases_14dayavg_per100k_delta
+) +
+  theme_ipsum(base_family = "Futura Medium") +
+  ggtitle("November") +
+  theme(legend.position = "none") +
+ggbetweenstats(
+  data = school_closing_cases %>%
+    dplyr::filter(month == "Dec" & isnt_outlier == T),
+  x = school_closing,
+  y = cases_14dayavg_per100k_delta
+) +
+  theme_ipsum(base_family = "Futura Medium") +
+  ggtitle("December") +
+  theme(legend.position = "none")
+)
+```
+
+```{r gathering_restrictions_cases}
+#Create Dataframe
+gathering_restrictions_cases <- final_df %>%
+  dplyr::select(fips, date, month, population, daily_cases) %>%
+  group_by(fips) %>%
+  mutate(cases_14dayavg_per100k = roll_mean(daily_cases, n = 14, align = "right", fill = 0)/population*100000) %>%
+  ungroup() %>%
+  dplyr::filter(year(date) == 2021) %>%
+  group_by(fips, month) %>%
+  dplyr::filter(date == first(date) | date == last(date)) %>%
+  dplyr::mutate(cases_14dayavg_per100k_delta = cases_14dayavg_per100k / dplyr::lag(cases_14dayavg_per100k,default=first(cases_14dayavg_per100k)) - 1) %>%
+  ungroup() %>%
+  select(-population, -daily_cases) %>%
+  inner_join(
+    final_df %>%
+      filter(year(date) == 2021) %>%
+      group_by(fips, month, gatherings_restrictions) %>%
+      tally() %>%
+      ungroup() %>%
+      group_by(fips, month) %>%
+      slice_max(order_by = n, with_ties = F) %>%
+      ungroup() %>%
+      select(fips, month, gatherings_restrictions)
+  ) %>%
+  dplyr::filter(cases_14dayavg_per100k_delta != 0) %>%
+  dplyr::select(month, gatherings_restrictions, cases_14dayavg_per100k_delta) %>%
+  mutate(gatherings_restrictions = as.character(abs(as.numeric(gatherings_restrictions)))) %>%
+  mutate(isnt_outlier = isnt_out_tukey(cases_14dayavg_per100k_delta))
+
+#Table
+gathering_restrictions_cases %>%
+  group_by(month, gatherings_restrictions) %>%
+  tally() %>%
+  reshape2::dcast(month ~ gatherings_restrictions) %>%
+  replace(is.na(.), 0) %>%
+  gt() %>%
+  tab_options(table.font.names = "Futura") %>%
+  tab_spanner(
+    label = "Gathering Restrictions",
+    columns = c(`0`, `1`, `2`, `3`, `4`)
+  ) %>% 
+  tab_source_note(
+    source_note = md("0 - No Restrictions")
+  ) %>%
+  tab_source_note(
+    source_note = md("1 - Restrictions on very large gatherings (the limit is above 1000 people)")
+  ) %>% 
+  tab_source_note(
+    source_note = md("2 - Restrictions on gatherings between 101-1000 people")
+  ) %>%
+  tab_source_note(
+    source_note = md("3 - Restrictions on gatherings between 11-100 people")
+  ) %>% 
+  tab_source_note(
+    source_note = md("4 - Restrictions on gatherings of 10 people or less")
+  )
+
+#Plot
+(
+ggbetweenstats(
+  data = gathering_restrictions_cases %>%
+    dplyr::filter(month == "Jan" & isnt_outlier == T),
+  x = gatherings_restrictions,
+  y = cases_14dayavg_per100k_delta
+) +
+  theme_ipsum(base_family = "Futura Medium") +
+  ggtitle("January") +
+  theme(legend.position = "none") +
+ggbetweenstats(
+  data = gathering_restrictions_cases %>%
+    dplyr::filter(month == "Feb" & isnt_outlier == T),
+  x = gatherings_restrictions,
+  y = cases_14dayavg_per100k_delta
+) +
+  theme_ipsum(base_family = "Futura Medium") +
+  ggtitle("February") +
+  theme(legend.position = "none") +
+ggbetweenstats(
+  data = gathering_restrictions_cases %>%
+    dplyr::filter(month == "Mar" & isnt_outlier == T),
+  x = gatherings_restrictions,
+  y = cases_14dayavg_per100k_delta
+) +
+  theme_ipsum(base_family = "Futura Medium") +
+  ggtitle("March") +
+  theme(legend.position = "none")
+) / (
+ggbetweenstats(
+  data = gathering_restrictions_cases %>%
+    dplyr::filter(month == "Apr" & isnt_outlier == T),
+  x = gatherings_restrictions,
+  y = cases_14dayavg_per100k_delta
+) +
+  theme_ipsum(base_family = "Futura Medium") +
+  ggtitle("April") +
+  theme(legend.position = "none") +
+ggbetweenstats(
+  data = gathering_restrictions_cases %>%
+    dplyr::filter(month == "May" & isnt_outlier == T),
+  x = gatherings_restrictions,
+  y = cases_14dayavg_per100k_delta
+) +
+  theme_ipsum(base_family = "Futura Medium") +
+  ggtitle("May") +
+  theme(legend.position = "none") +
+ggbetweenstats(
+  data = gathering_restrictions_cases %>%
+    dplyr::filter(month == "Jun" & isnt_outlier == T),
+  x = gatherings_restrictions,
+  y = cases_14dayavg_per100k_delta
+) +
+  theme_ipsum(base_family = "Futura Medium") +
+  ggtitle("June") +
+  theme(legend.position = "none")
+)
+```
+
+```{r policy_mobility_clustering}
+#Function
+prominent_policy <- function(policy = "school_closing") {
+  final_df %>%
+    dplyr::filter(year(date) == 2021) %>%
+    dplyr::mutate(policy_ = !!sym(policy)) %>%
+    dplyr::mutate(policy_ = abs(as.numeric(policy_))) %>%
+    group_by(fips, month, policy_) %>%
+    tally() %>%
+    ungroup() %>%
+    group_by(fips, month) %>%
+    slice_max(order_by = n, with_ties = F) %>%
+    ungroup() %>%
+    select(fips, month, policy_)
+}
+
+#Create Dataframe
+gov_mobility_cluster <- final_df %>%
+  dplyr::select(fips, date, month, population, daily_cases, daily_deaths) %>%
+  group_by(fips) %>%
+  mutate(cases_14dayavg_per100k = roll_mean(daily_cases, n = 14, align = "right", fill = 0)/population*100000, 
+         deaths_14dayavg_per100k = roll_mean(daily_deaths, n = 14, align = "right", fill = 0)/population*100000) %>%
+  ungroup() %>%
+  dplyr::filter(year(date) == 2021) %>%
+  group_by(fips, month) %>%
+  dplyr::filter(date == first(date) | date == last(date)) %>%
+  dplyr::mutate(cases_14dayavg_per100k_delta = cases_14dayavg_per100k / dplyr::lag(cases_14dayavg_per100k,default=first(cases_14dayavg_per100k)) - 1,
+                deaths_14dayavg_per100k_delta = deaths_14dayavg_per100k / dplyr::lag(deaths_14dayavg_per100k,default=first(deaths_14dayavg_per100k)) - 1) %>%
+  ungroup() %>%
+  dplyr::filter(cases_14dayavg_per100k_delta != 0) %>%
+  dplyr::select(fips, month, cases_14dayavg_per100k_delta, deaths_14dayavg_per100k_delta) %>%
+  mutate(isnt_outlier = isnt_out_tukey(cases_14dayavg_per100k_delta) & isnt_out_tukey(deaths_14dayavg_per100k_delta)) %>%
+  dplyr::filter(isnt_outlier == T) %>%
+  dplyr::select(-isnt_outlier)
+
+#Add Prominent Policy by Month
+policy_measures <- c("school_closing", "workplace_closing", "cancel_events", "gatherings_restrictions", "transport_closing",
+            "stay_home_restrictions", "internal_movement_restrictions", "international_movement_restrictions",
+            "testing_policy", "contact_tracing", "facial_coverings", "vaccination_policy", "elderly_people_protection",
+            "government_response_index", "stringency_index", "containment_health_index", "economic_support_index")
+
+for (i in 1:length(policy_measures)) {
+  gov_mobility_cluster <- gov_mobility_cluster %>%
+    inner_join(
+      prominent_policy(policy_measures[i]), by = c("fips", "month")
+    )
+}
+
+names(gov_mobility_cluster) <- c("fips", "month", "cases_14dayavg_per100k_delta", "deaths_14dayavg_per100k_delta", policy_measures)
+
+#Include Average Mobility by Month
+gov_mobility_cluster <- gov_mobility_cluster %>%
+  inner_join(
+    final_df %>%
+      dplyr::filter(year(date) == 2021) %>%
+      dplyr::select(fips, month, contains(c("baseline", "apple"))) %>%
+      group_by(fips, month) %>%
+      summarise_all(mean)
+  )
+
+#Rescale
+gov_mobility_cluster <- gov_mobility_cluster %>%
+  mutate_at(policy_measures, scales::rescale)
+
+#Cluster
+gov_mobility_cluster$policy_cluster <- rowSums(gov_mobility_cluster[,policy_measures[1:13]])
+gov_mobility_cluster <- gov_mobility_cluster %>%
+  dplyr::mutate(policy_cluster = cut_number(policy_cluster, 5)) %>%
+  dplyr::select(-fips, -month)
+
+#ggbetweenstats
+ggbetweenstats(
+  data    = gov_mobility_cluster,
+  x       = policy_cluster,
+  y       = deaths_14dayavg_per100k_delta,
+  title   = "Policy Measures & Mobility - Deaths",
+  caption = "",
+  ggtheme = theme_ipsum(base_family = "Futura Medium"),
+  centrality.point.args = list(color = plotly_colors[8], size = 4),
+  palette = "Accent"
+) +
+  scale_y_continuous(labels = scales::number_format(big.mark = ",")) +
+  theme(panel.grid.minor = element_blank())
+
+ggbetweenstats(
+  data    = gov_mobility_cluster,
+  x       = policy_cluster,
+  y       = cases_14dayavg_per100k_delta,
+  title   = "Policy Measures & Mobility - Cases",
+  caption = "",
+  ggtheme = theme_ipsum(base_family = "Futura Medium"),
+  centrality.point.args = list(color = plotly_colors[8], size = 4),
+  palette = "Accent"
+) +
+  scale_y_continuous(labels = scales::number_format(big.mark = ",")) +
+  theme(panel.grid.minor = element_blank())
+
+#Table
+gov_mobility_cluster %>%
+  select(-policy_measures[1:13]) %>%
+  tbl_summary(by=policy_cluster, type = list(economic_support_index ~ 'continuous')) %>%
+  as_gt() %>%
+  tab_options(table.font.names = "Futura")
+```
+
+```{r map cases}
+#Lat/Long Counties
+us_counties_map <- map_data("county") %>%
+  mutate(subregion = ifelse(subregion == "de kalb", "dekalb", subregion)) %>%
+  mutate(subregion = ifelse(subregion == "de soto" & region != "louisiana", "desoto", subregion)) %>%
+  mutate(subregion = ifelse(subregion == "de witt" & region != "illinois", "dewitt", subregion)) %>%
+  mutate(subregion = ifelse(subregion == "du page", "dupage", subregion)) %>%
+  mutate(subregion = ifelse(subregion == "la porte", "laporte", subregion)) %>%
+  mutate(subregion = ifelse(subregion == "la salle" & region == "illinois", "lasalle", subregion)) %>%
+  mutate(subregion = ifelse(subregion == "obrien", "o'brien", subregion)) %>%
+  mutate(subregion = ifelse(subregion == "la moure", "lamoure", subregion)) %>%
+  mutate(subregion = ifelse(subregion == "oglala dakota", "oglala lakota", subregion)) %>%
+  mutate(subregion = ifelse(subregion == "yellowstone national", "yellowstone", subregion)) %>%
+  mutate(subregion = gsub("st ", "st. ", subregion)) %>%
+  mutate(subregion = gsub("west. ", "west ", subregion)) %>%
+  mutate(subregion = gsub("east. ", "east ", subregion)) %>%
+  mutate(subregion = gsub("marys", "mary's", subregion)) %>%
+  mutate(subregion = gsub("georges", "george's", subregion)) %>%
+  mutate(subregion = gsub("annes", "anne's", subregion)) %>%
+  mutate(subregion = gsub("ste ", "ste. ", subregion))
+
+#Annual Cases for Map
+map_cases_df <- final_df %>%
+  dplyr::filter(year(date) == 2021) %>%
+  select(daily_cases, state, county, population) %>%
+  dplyr::mutate(state = tolower(state), county = tolower(county)) %>%
+  group_by(state, county) %>%
+  dplyr::summarise(total_cases = sum(daily_cases), population = mean(population)) %>%
+  ungroup() %>%
+  dplyr::mutate(cases_per_100k = round(total_cases/population*100000)) %>%
+  dplyr::mutate(decile = ntile(cases_per_100k,10)) %>%
+  inner_join(
+    us_counties_map, by=c("county"="subregion", "state"="region")
+  )
+
+#Plot Annual
+ggplot(data = map_cases_df, mapping = aes(x = long, y = lat, group = group)) +
+  geom_polygon(color=plotly_colors[1], size = .15, aes(fill = decile)) +
+  scale_fill_gradient(low = "white", high = plotly_colors[1], name = "Cases Per 100k", labels=scales::label_comma(accuracy = 1)) +
+  theme(axis.line=element_blank(),
+        axis.text=element_blank(),
+        axis.ticks=element_blank(),
+        axis.title=element_blank(),
+        panel.background=element_blank(),
+        panel.border=element_blank(),
+        panel.grid=element_blank(),
+        legend.position = "none") +
+  geom_path(data = state_map , colour = "black") +
+  labs(title = "2021 Cases Per 100k by County",
+              subtitle = "",
+              caption = "Colored by Decile Rank")
+
+#County Cases per Month for Map
+cty_cases_mo_df <- final_df %>%
+  dplyr::filter(year(date) == 2021) %>%
+  select(month, daily_cases, state, county, population) %>%
+  dplyr::mutate(state = tolower(state), county = tolower(county)) %>%
+  group_by(state, county, month) %>%
+  dplyr::summarise(total_cases = sum(daily_cases), population = mean(population)) %>%
+  ungroup() %>%
+  dplyr::mutate(cases_per_100k = round(total_cases/population*100000)) %>%
+  inner_join(
+    us_counties_map, by=c("county"="subregion", "state"="region")
+  )
+
+#Plot Monthly Cases by County
+ggplot(data = cty_cases_mo_df, mapping = aes(x = long, y = lat, group = group)) +
+  geom_polygon(color=plotly_colors[1], size = .15, aes(fill = oob_squish(cases_per_100k, range = c(0, 1500)))) +
+  scale_fill_gradient(low = "white", high = plotly_colors[1], name = "Cases Per 100k", labels=scales::label_comma(accuracy = 1)) +
+  geom_path(data = state_map , colour = "black") +
+  labs(title = "2021 Monthly Cases Per 100k by County",
+              subtitle = "",
+              caption = " 0 (White) to 1500+ (Blue) Per 100k") +
+  facet_wrap(~month) +
+  theme_ipsum() +
+  theme(axis.line=element_blank(),
+        axis.text.x = element_blank(),
+        axis.title.x = element_blank(),
+        axis.text.y = element_blank(),
+        axis.title.y = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.ticks=element_blank(),
+        axis.title=element_blank(),
+        panel.background=element_blank(),
+        panel.border=element_blank(),
+        panel.grid=element_blank(),
+        legend.position = "none")
+
+#Monthly Cases by State for Map
+map_cases_monthly_df <- final_df %>%
+  dplyr::filter(year(date) == 2021) %>%
+  dplyr::mutate(state = tolower(state)) %>%
+  group_by(state, month, county) %>%
+  dplyr::summarise(total_cases = sum(daily_cases), population = mean(population)) %>%
+  group_by(state, month) %>%
+  dplyr::summarise(total_cases = sum(total_cases), population = sum(population)) %>%
+  ungroup() %>%
+  dplyr::mutate(cases_per_100k = round(total_cases/population*100000)) %>%
+  inner_join(
+    state_map, by=c("state"="region")
+  )
+
+#Plot Monthly Animated
+ggplot(data = map_cases_monthly_df, mapping = aes(x = long, y = lat, group = group)) +
+  geom_polygon(color=plotly_colors[8], size = .15, aes(fill = oob_squish(cases_per_100k, range = c(0, 1500)))) +
+  scale_fill_gradient(low = "white", high = plotly_colors[1], name = "Cases Per 100k", labels=scales::label_comma(accuracy = 1)) +
+  theme(axis.line=element_blank(),
+        axis.text=element_blank(),
+        axis.ticks=element_blank(),
+        axis.title=element_blank(),
+        panel.background=element_blank(),
+        panel.border=element_blank(),
+        panel.grid=element_blank(),
+        legend.position = "none") +
+  labs(title = "Cases Per 100k",
+              subtitle = "{closest_state} 2021",
+              caption = "") +
+  transition_states(month, state_length = 5)
+
+#Plot Monthly Facet
+ggplot(data = map_cases_monthly_df, mapping = aes(x = long, y = lat, group = group)) +
+  geom_polygon(color=plotly_colors[8], size = .15, aes(fill = oob_squish(cases_per_100k, range = c(0, 1500)))) +
+  scale_fill_gradient2(low = "white", high = plotly_colors[1], name = "Cases Per 100k", labels=scales::label_comma(accuracy = 1)) +
+  theme(axis.line=element_blank(),
+        axis.text=element_blank(),
+        axis.ticks=element_blank(),
+        axis.title=element_blank(),
+        panel.background=element_blank(),
+        panel.border=element_blank(),
+        panel.grid=element_blank(),
+        legend.position = "none",
+        strip.placement = "outside",
+        strip.background = element_blank()) +
+  labs(title = "Cases Per 100k",
+              subtitle = "",
+              caption = "") +
+  facet_wrap(~month)
+
+#Clean Up
+invisible(gc())
+```
+
+```{r sources}
+#ADI
+#https://www.neighborhoodatlas.medicine.wisc.edu/
+
+#Cases/Deaths
+#https://www.kaggle.com/headsortails/covid19-us-county-jhu-data-demographics?select=covid_us_county.csv
+
+#County Health Rankings
+#https://www.countyhealthrankings.org/app/
+
+#Testing
+#https://coronavirus.jhu.edu/testing/individual-states
+
+#Vaccinations
+#https://data.cdc.gov/Vaccinations/COVID-19-Vaccinations-in-the-United-States-County/8xkx-amqh
+
+#Education
+#https://www.ers.usda.gov/data-products/county-level-data-sets/download-data/
+
+#American Community Survey
+#https://www.census.gov/programs-surveys/acs/data.html
+
+#Mobility
+#https://www.google.com/covid19/mobility/
+#https://www.kaggle.com/aiswaryaramachandran/google-mobility-data?select=2020_US_Region_Mobility_Report.csv
+#https://covid19.apple.com/mobility
+
+#Political
+#https://dataverse.harvard.edu/dataset.xhtml?persistentId=doi:10.7910/DVN/VOQCHQ
+
+#Weather
+#https://www.ncdc.noaa.gov/cag/county/mapping
+```
+
+### Not Using Code Below
+
+```{r vaers}
+# #State Level Political Affiliation
+# st_political_df <- fread("../Data/countypres_2000-2020.csv") %>%
+#   dplyr::filter(year == 2020) %>%
+#   group_by(state_po, party) %>%
+#   summarise(candidatevotes = sum(candidatevotes, na.rm = T), totalvotes = sum(totalvotes, na.rm = T)) %>%
+#   ungroup() %>%
+#   mutate(vote_pct = candidatevotes/totalvotes)
+# 
+# #Vax Data
+# vaers_df <- fread("../Data/2021VAERSData/2021VAERSVAX.csv") %>%
+#   dplyr::filter(VAX_TYPE == "COVID19") %>%
+#   select(VAERS_ID) %>%
+#   inner_join(
+#     fread("../Data/2021VAERSData/2021VAERSDATA.csv") %>%
+#       select(VAERS_ID, STATE) %>%
+#       mutate(STATE = toupper(STATE))
+#   ) %>%
+#   group_by(STATE) %>%
+#   summarise(vaers_ct = n()) %>%
+#   ungroup()
+# 
+# #Population
+# pop_df <- zipcodeR::zip_code_db %>%
+#   group_by(state) %>%
+#   summarise(population = sum(population, na.rm = T)) %>%
+#   ungroup()
+# 
+# #Merge
+# st_political_df %>%
+#   dplyr::filter(party == "REPUBLICAN") %>%
+#   inner_join(
+#     vaers_df, by=c("state_po"="STATE")
+#   ) %>%
+#   inner_join(
+#     pop_df, by=c("state_po"="state")
+#   ) %>%
+#   mutate(vaers_rt = vaers_ct/population) %>%
+#   ggplot(aes(x=vote_pct, y=vaers_rt)) +
+#   geom_point() +
+#   geom_smooth()
+```
+
+```{r monthly_cases}
+# final_df %>%
+#   dplyr::filter(year(date) == 2021) %>%
+#   mutate(month = month(date, label = T)) %>%
+#   group_by(fips, month) %>%
+#   summarise(monthly_cases = sum(daily_cases, na.rm = T), population = mean(population)) %>%
+#   ungroup() %>%
+#   group_by(month) %>%
+#   summarise(monthly_cases = sum(monthly_cases, na.rm = T), population = sum(population)) %>%
+#   ungroup() %>%
+#   mutate(monthly_cases_per_100k = monthly_cases/population*100000) %>%
+#   ggplot(aes(x = month, y = monthly_cases_per_100k)) +
+#   geom_bar(stat = "identity", fill = plotly_colors[1]) +
+#   theme_minimal() +
+#   theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), axis.title.x = element_blank()) +
+#   scale_y_continuous(labels = scales::comma_format()) +
+#   ylab("Monthly Cases Per 100k")
+```
+
+```{r acs economic}
+# #Read
+# acs_econ <- fread("../Data/ACS_Economic/ACSDP5Y2019.DP03_data_with_overlays_2021-11-05T171612.csv") %>%
+#   clean_names() %>%
+#   select(contains(c("id", "percent"))) %>%
+#   select(-contains("margin")) %>%
+#   mutate(fips = str_sub(id,-5,-1))
+# 
+# #Select Columns
+# acs_econ <- bind_cols(
+#   acs_econ %>% select(fips),
+#   acs_econ %>%
+#     select_if(is.numeric) %>%
+#     select(which(colMeans(.) < 100)) %>%
+#     mutate_all(div100)
+# )
+# 
+# #Append to Variable List
+# annual_vars <- c(annual_vars, names(acs_econ %>% select(-fips)))
+# invisible(gc())
+```
+
+```{r acs housing}
+# #Read
+# acs_house <- fread("../Data/ACS_Housing/ACSDP5Y2019.DP04_data_with_overlays_2021-11-06T114945.csv") %>%
+#   clean_names() %>%
+#   select(contains(c("id", "percent"))) %>%
+#   select(-contains("margin")) %>%
+#   mutate(fips = str_sub(id,-5,-1))
+# 
+# #Select Columns
+# acs_house <- bind_cols(
+#   acs_house %>% select(fips),
+#   acs_house %>%
+#     select_if(is.numeric) %>%
+#     select(which(colMeans(.) < 100)) %>%
+#     mutate_all(div100)
+# )
+# 
+# #Append to Variable List
+# annual_vars <- c(annual_vars, names(acs_house %>% select(-fips)))
+# invisible(gc())
+```
+
+```{r acs social}
+# #Read
+# acs_social <- fread("../Data/ACS_Social/ACSDP5Y2019.DP02_data_with_overlays_2021-11-07T121021.csv") %>%
+#   clean_names() %>%
+#   select(contains(c("id", "percent"))) %>%
+#   select(-contains("margin")) %>%
+#   mutate(fips = str_sub(id,-5,-1))
+# 
+# #Select Columns
+# acs_social <- bind_cols(
+#   acs_social %>% select(fips),
+#   acs_social %>%
+#     select_if(is.numeric) %>%
+#     select(which(colMeans(.) < 100)) %>%
+#     mutate_all(div100)
+# )
+# 
+# #Append to Variable List
+# annual_vars <- c(annual_vars, names(acs_social %>% select(-fips)))
+# invisible(gc())
+```
+
+```{r age}
+# age_df <- fread("../Data/cc-est2019-alldata.csv") %>%
+#   mutate(fips = paste0(str_pad(STATE, 2, "left", "0"), str_pad(COUNTY, 3, "left", "0"))) %>%
+#   dplyr::filter(YEAR == 12) %>%
+#   select(fips, AGEGRP, TOT_POP) %>%
+#   spread(AGEGRP, TOT_POP) %>%
+#   clean_names() %>%
+#   mutate_at(vars(x1:x18),function(i)i/.$x0) %>%
+#   select(-x0) %>%
+#   dplyr::rename(age0_4 = x1, age5_9 = x2, age10_14 = x3, age15_19 = x4, age20_24 = x5, age25_29 = x6, age30_34 = x7, age35_39 = x8, age40_44 = x9, age45_49 = x10, age50_54 = x11, age55_59 = x12, age60_64 = x13, age65_69 = x14, age70_74 = x15, age75_79 = x16, age80_84 = x17, age85plus = x18)
+# 
+# #Append to Variable List
+# annual_vars <- c(annual_vars, names(age_df[,2:(length(age_df))]))
+# invisible(gc())
+```
+
+```{r caret xgboost model cases}
+# #Tune & Model
+# tune_grid <- expand.grid(
+#   nrounds = 100,
+#   eta = .1,
+#   max_depth = 5,
+#   gamma = c(0),
+#   colsample_bytree = 1,
+#   min_child_weight = 1,
+#   subsample = 1
+# )
+# 
+# tune_control <- caret::trainControl(
+#   method = "cv", # cross-validation
+#   number = 3, # with n folds
+#   verboseIter = T,
+#   allowParallel = T #
+# )
+
+# #Fit Model
+# xgb_tune_cases <- caret::train(
+#   x = train_x,
+#   y = train_cases_y,
+#   trControl = tune_control,
+#   tuneGrid = tune_grid,
+#   method = "xgbTree",
+#   verbose = T,
+#   nthreads = 4
+# )
+# 
+# #Save Model
+# saveRDS(xgb_tune_cases, "../Model/xgb_model_cases.rds")
+
+# #Read Model
+# xgb_tune_cases <- readRDS("../Model/xgb_model_cases.rds")
+# 
+# #Compute RMSE
+# tunePred <- predict(xgb_tune_cases,test_x)
+# caret::RMSE(tunePred, test_cases_y)
+# 
+# #Visualize Residuals
+# data.frame(tuneResidual = test_cases_y-tunePred,
+#            row = 1:length(tunePred)) %>% 
+#     tidyr::gather(type, value, -row) %>%  
+#     ggplot(aes(x = row, y =value, color = type)) + 
+#     geom_line(color=plotly_colors[6]) + facet_wrap(~type) + 
+#     theme_minimal()
+# 
+# #Variable Importance
+# ggplotly(
+#   varImp(xgb_tune_cases)$importance %>%
+#   dplyr::filter(Overall>.5) %>%
+#   rownames_to_column(var = "Variable") %>%
+#   ggplot(aes(x=Overall, y=reorder(Variable, Overall, sum))) +
+#   geom_bar(stat = "identity", fill = plotly_colors[3]) +
+#   theme_minimal() +
+#   theme(axis.title.x = element_blank(), axis.text.x = element_blank(), axis.title.y = element_blank(), panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+# , tooltip = NULL)
+# 
+# #Plot Actual vs Predicted
+# data.frame(date = train_test$date, population = train_test$population, actual = train_test_cases_y, prediction = predict(xgb_tune_cases, train_test_x)) %>%
+#   mutate(date = as.Date(date) + 30, actual = population * actual, prediction = population * prediction) %>%
+#   group_by(date) %>%
+#   summarise_all(sum) %>%
+#   mutate(actual = actual/population, prediction = prediction/population) %>%
+#   ungroup() %>%
+#   plot_ly(type = 'scatter', mode = 'lines') %>%
+#   add_trace(x = ~date, y = ~actual, name = 'Actual', line = list(color = plotly_colors[4])) %>%
+#   add_trace(x = ~date, y = ~prediction, name = 'Prediction', line = list(color = plotly_colors[5])) %>%
+#   layout(
+#     title = "USA Cases: Actual vs 30-Day Prediction",
+#     xaxis = list(title=""),
+#     yaxis = list(title="Cases Per 100k (7 Day Avg)")
+#   )
+# 
+# #Clean Up
+# gc()
+```
+
+```{r caret xgboost model deaths}
+# #Fit Model
+# xgb_tune_deaths <- caret::train(
+#   x = train_x,
+#   y = train_deaths_y,
+#   trControl = tune_control,
+#   tuneGrid = tune_grid,
+#   method = "xgbTree",
+#   verbose = T,
+#   nthreads = 4
+# )
+# 
+# #Save Model
+# saveRDS(xgb_tune_deaths, "../Model/xgb_model_deaths.rds")
+
+# #Read Model
+# xgb_tune_deaths <- readRDS("../Model/xgb_model_deaths.rds")
+# 
+# #Compute RMSE
+# tunePred <- predict(xgb_tune_deaths,test_x)
+# caret::RMSE(tunePred, test_deaths_y)
+# 
+# #Visualize Residuals
+# data.frame(tuneResidual = test_deaths_y-tunePred,
+#            row = 1:length(tunePred)) %>% 
+#     tidyr::gather(type, value, -row) %>%  
+#     ggplot(aes(x = row, y =value, color = type)) + 
+#     geom_line(color=plotly_colors[6]) + facet_wrap(~type) + 
+#     theme_minimal()
+# 
+# #Variable Importance
+# ggplotly(
+#   varImp(xgb_tune_deaths)$importance %>%
+#   dplyr::filter(Overall>.5) %>%
+#   rownames_to_column(var = "Variable") %>%
+#   ggplot(aes(x=Overall, y=reorder(Variable, Overall, sum))) +
+#   geom_bar(stat = "identity", fill = plotly_colors[3]) +
+#   theme_minimal() +
+#   theme(axis.title.x = element_blank(), axis.text.x = element_blank(), axis.title.y = element_blank(), panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+# , tooltip = NULL)
+# 
+# #Plot Actual vs Predicted
+# data.frame(date = train_test$date, population = train_test$population, actual = train_test_deaths_y, prediction = predict(xgb_tune_deaths, train_test_x)) %>%
+#   mutate(date = as.Date(date) + 30, actual = population * actual, prediction = population * prediction) %>%
+#   group_by(date) %>%
+#   summarise_all(sum) %>%
+#   mutate(actual = actual/population, prediction = prediction/population) %>%
+#   ungroup() %>%
+#   plot_ly(type = 'scatter', mode = 'lines') %>%
+#   add_trace(x = ~date, y = ~actual, name = 'Actual', line = list(color = plotly_colors[4])) %>%
+#   add_trace(x = ~date, y = ~prediction, name = 'Prediction', line = list(color = plotly_colors[5])) %>%
+#   layout(
+#     title = "USA Deaths: Actual vs 30-Day Prediction",
+#     xaxis = list(title=""),
+#     yaxis = list(title="Deaths Per 100k (7 Day Avg)")
+#   )
+# 
+# #Clean Up
+# gc()
+```
+
+```{r tidymodels tabnet}
+### ABANDON ###
+
+# #Seed
+# set.seed(84)
+# 
+# #Split
+# train_tabnet <- train %>% select(-fips, -date, -cases, -deaths, -daily_cases, -daily_deaths, -yrmo)
+# test_tabnet <- test %>% select(-fips, -date, -cases, -deaths, -daily_cases, -daily_deaths, -yrmo)
+# 
+# #Recipe
+# rec <- recipe(cases_7dayavg_per100k_lead30 ~., data = train_tabnet) %>%
+#   step_normalize(all_numeric(), -all_outcomes()) %>%
+#   step_nzv(all_predictors()) %>%
+#   step_umap(all_predictors(), outcome = vars(cases_7dayavg_per100k_lead30), keep_original_cols = T) %>%
+#   step_pca(all_predictors(), keep_original_cols = T) %>%
+#   step_corr(all_predictors()) %>%
+#   step_rm(contains("county")) %>%
+#   step_dummy(all_nominal())
+# 
+# #Preview
+# preview_tabnet <- prep(rec, training = train_tabnet)
+# preview_tabnet <- bake(preview_tabnet, train_tabnet)
+# 
+# #Model
+# mod <- tabnet() %>%
+#   set_engine("torch", verbose = TRUE) %>%
+#   set_mode("regression")
+# 
+# #Workflow
+# wf <- workflow() %>%
+#   add_model(mod) %>%
+#   add_recipe(rec)
+# 
+# #Cross Validation
+# folds <- vfold_cv(train, v = 5)
+# 
+# #Fit
+# sys_time <- Sys.time()
+# fit_rs <- wf %>%
+#   fit_resamples(folds)
+# sys_time <- Sys.time() - sys_time
+```
+
+```{r adi_sdoh_hc_archive}
+# #June 30, 2021 + 3 Months Cases
+# adi_sdoh_health_care_2022_06_30 <- final_df %>%
+#   select(fips, date, daily_cases, population) %>%
+#   dplyr::filter(date >= "2021-07-01" & date <= "2021-09-30") %>%
+#   left_join(
+#     final_df %>%
+#       dplyr::filter(date == "2021-06-30") %>%
+#       mutate(bucket = cut_number(Series_Complete_Pop_Pct, 4)) %>%
+#       select(fips, bucket)
+#   ) %>%
+#   group_by(date, bucket) %>%
+#   summarise(daily_cases = sum(daily_cases), population = sum(population)) %>%
+#   ungroup() %>%
+#   mutate(daily_cases_14dayavg_per_100k = roll_mean(daily_cases, n = 14, align = "right", fill = 0)/population*100000, bucket2 = bucket) %>%
+#   dplyr::select(-daily_cases, -population)
+# 
+# ggplot(data=adi_sdoh_health_care_2022_06_30, aes(x=date, y=daily_cases_14dayavg_per_100k)) +
+#   geom_line(data=adi_sdoh_health_care_2022_06_30 %>% dplyr::select(-bucket), aes(group=bucket2), color="grey", size=0.5, alpha=0.5) +
+#   geom_line(aes(color=bucket), color=plotly_colors[1], size=1.2)+
+#   scale_color_viridis(discrete = T) +
+#   theme_ipsum(base_family = "Futura Medium") +
+#   theme(
+#     legend.position="none",
+#     plot.title = element_text(size=14),
+#     panel.grid = element_blank()
+#   ) +
+#   ggtitle("Daily Cases & Vaccination %") +
+#   ylab("Cases Per 100k (14 Day Avg)") +
+#   xlab("") +
+#   facet_wrap(~bucket)
+# 
+# #Sept 30, 2021 + 3 Months Cases
+# adi_sdoh_health_care_2022_09_30 <- final_df %>%
+#   select(fips, date, daily_cases, population) %>%
+#   dplyr::filter(date >= "2021-10-01" & date <= "2021-12-31") %>%
+#   left_join(
+#     final_df %>%
+#       dplyr::filter(date == "2021-09-30") %>%
+#       mutate(bucket = cut_number(Series_Complete_Pop_Pct, 4)) %>%
+#       select(fips, bucket)
+#   ) %>%
+#   group_by(date, bucket) %>%
+#   summarise(daily_cases = sum(daily_cases), population = sum(population)) %>%
+#   ungroup() %>%
+#   mutate(daily_cases_14dayavg_per_100k = roll_mean(daily_cases, n = 14, align = "right", fill = 0)/population*100000, bucket2 = bucket) %>%
+#   dplyr::select(-daily_cases, -population)
+# 
+# ggplot(data=adi_sdoh_health_care_2022_09_30, aes(x=date, y=daily_cases_14dayavg_per_100k)) +
+#   geom_line(data=adi_sdoh_health_care_2022_09_30 %>% dplyr::select(-bucket), aes(group=bucket2), color="grey", size=0.5, alpha=0.5) +
+#   geom_line(aes(color=bucket), color=plotly_colors[1], size=1.2)+
+#   scale_color_viridis(discrete = T) +
+#   theme_ipsum(base_family = "Futura Medium") +
+#   theme(
+#     legend.position="none",
+#     plot.title = element_text(size=14),
+#     panel.grid = element_blank()
+#   ) +
+#   ggtitle("Daily Cases & Vaccination %") +
+#   ylab("Cases Per 100k (14 Day Avg)") +
+#   xlab("") +
+#   facet_wrap(~bucket)
+# 
+# #June 30, 2021 + 3 Months Deaths
+# adi_sdoh_health_care_2022_06_30_deaths <- final_df %>%
+#   select(fips, date, daily_deaths, population) %>%
+#   dplyr::filter(date >= "2021-07-01" & date <= "2021-09-30") %>%
+#   left_join(
+#     final_df %>%
+#       dplyr::filter(date == "2021-06-30") %>%
+#       mutate(bucket = cut_number(Series_Complete_Pop_Pct, 4)) %>%
+#       select(fips, bucket)
+#   ) %>%
+#   group_by(date, bucket) %>%
+#   summarise(daily_deaths = sum(daily_deaths), population = sum(population)) %>%
+#   ungroup() %>%
+#   mutate(daily_deaths_14dayavg_per_100k = roll_mean(daily_deaths, n = 14, align = "right", fill = 0)/population*100000, bucket2 = bucket) %>%
+#   dplyr::select(-daily_deaths, -population)
+# 
+# ggplot(data=adi_sdoh_health_care_2022_06_30_deaths, aes(x=date, y=daily_deaths_14dayavg_per_100k)) +
+#   geom_line(data=adi_sdoh_health_care_2022_06_30_deaths %>% dplyr::select(-bucket), aes(group=bucket2), color="grey", size=0.5, alpha=0.5) +
+#   geom_line(aes(color=bucket), color=plotly_colors[2], size=1.2)+
+#   scale_color_viridis(discrete = T) +
+#   theme_ipsum(base_family = "Futura Medium") +
+#   theme(
+#     legend.position="none",
+#     plot.title = element_text(size=14),
+#     panel.grid = element_blank()
+#   ) +
+#   ggtitle("Daily Deaths & Vaccination %") +
+#   ylab("Deaths Per 100k (14 Day Avg)") +
+#   xlab("") +
+#   facet_wrap(~bucket)
+# 
+# #June 30, 2021 + 3 Months Deaths
+# adi_sdoh_health_care_2022_09_30_deaths <- final_df %>%
+#   select(fips, date, daily_deaths, population) %>%
+#   dplyr::filter(date >= "2021-10-01" & date <= "2021-12-31") %>%
+#   left_join(
+#     final_df %>%
+#       dplyr::filter(date == "2021-09-30") %>%
+#       mutate(bucket = cut_number(Series_Complete_Pop_Pct, 4)) %>%
+#       select(fips, bucket)
+#   ) %>%
+#   group_by(date, bucket) %>%
+#   summarise(daily_deaths = sum(daily_deaths), population = sum(population)) %>%
+#   ungroup() %>%
+#   mutate(daily_deaths_14dayavg_per_100k = roll_mean(daily_deaths, n = 14, align = "right", fill = 0)/population*100000, bucket2 = bucket) %>%
+#   dplyr::select(-daily_deaths, -population)
+# 
+# ggplot(data=adi_sdoh_health_care_2022_09_30_deaths, aes(x=date, y=daily_deaths_14dayavg_per_100k)) +
+#   geom_line(data=adi_sdoh_health_care_2022_09_30_deaths %>% dplyr::select(-bucket), aes(group=bucket2), color="grey", size=0.5, alpha=0.5) +
+#   geom_line(aes(color=bucket), color=plotly_colors[2], size=1.2)+
+#   scale_color_viridis(discrete = T) +
+#   theme_ipsum(base_family = "Futura Medium") +
+#   theme(
+#     legend.position="none",
+#     plot.title = element_text(size=14),
+#     panel.grid = element_blank()
+#   ) +
+#   ggtitle("Daily Deaths & Vaccination %") +
+#   ylab("Deaths Per 100k (14 Day Avg)") +
+#   xlab("") +
+#   facet_wrap(~bucket)
+```
+
+```{r vax_policy_cases}
+# #Create Dataframe
+# vax_policy_cases <- final_df %>%
+#   dplyr::select(fips, date, month, population, daily_cases) %>%
+#   group_by(fips) %>%
+#   mutate(cases_14dayavg_per100k = roll_mean(daily_cases, n = 14, align = "right", fill = 0)/population*100000) %>%
+#   ungroup() %>%
+#   dplyr::filter(year(date) == 2021) %>%
+#   group_by(fips, month) %>%
+#   dplyr::filter(date == first(date) | date == last(date)) %>%
+#   dplyr::mutate(cases_14dayavg_per100k_delta = cases_14dayavg_per100k / dplyr::lag(cases_14dayavg_per100k,default=first(cases_14dayavg_per100k)) - 1) %>%
+#   dplyr::mutate(cases_14dayavg_per100k_delta = oob_squish_any(cases_14dayavg_per100k_delta, range = c(-10, 10))) %>%
+#   ungroup() %>%
+#   select(-population, -daily_cases) %>%
+#   left_join(
+#     final_df %>%
+#       filter(year(date) == 2021) %>%
+#       group_by(fips, month, vaccination_policy) %>%
+#       tally() %>%
+#       ungroup() %>%
+#       group_by(fips, month) %>%
+#       slice_max(order_by = n, with_ties = F) %>%
+#       ungroup() %>%
+#       select(fips, month, vaccination_policy)
+#   ) %>%
+#   dplyr::filter(cases_14dayavg_per100k_delta != 0) %>%
+#   dplyr::select(month, vaccination_policy, cases_14dayavg_per100k_delta)
+# 
+# #Table
+# vax_policy_cases %>%
+#   group_by(month, vaccination_policy) %>%
+#   tally() %>%
+#   reshape2::dcast(month ~ vaccination_policy) %>%
+#   replace(is.na(.), 0) %>%
+#   gt() %>%
+#   tab_options(table.font.names = "Futura")
+```
+
+```{r gov_mobility_model_retail}
+# #Define y and x
+# y_retrec <- "retail_and_recreation_percent_change_from_baseline"
+# x_retrec <- names(gov_mobility_scale)[!grepl("baseline|apple", names(gov_mobility_scale))]
+# 
+# set.seed(84)
+# ix <- sample(nrow(gov_mobility_scale), 0.8 * nrow(gov_mobility_scale))
+# 
+# dtrain_retrec <- xgb.DMatrix(data.matrix(gov_mobility_scale[ix, x_retrec]),
+#                       label = gov_mobility_scale[ix, y_retrec])
+# dvalid_retrec <- xgb.DMatrix(data.matrix(gov_mobility_scale[-ix, x_retrec]),
+#                       label = gov_mobility_scale[-ix, y_retrec])
+# 
+# #Fit Model
+# fit_xgb_retrec <- xgb.train(
+#   data = dtrain_retrec,
+#   watchlist = list(valid = dvalid_retrec),
+#   early_stopping_rounds = 20,
+#   print_every_n = 100,
+#   nrounds = 1000
+# )
+# 
+# #Save Model
+# saveRDS(fit_xgb_retrec, "../Model/fit_xgb_retrec.rds")
+# 
+# #Read Model
+# fit_xgb_retrec <- readRDS("../Model/fit_xgb_retrec.rds")
+# 
+# ### SHAP Summary ###
+# # Step 1: Select some observations
+# X_retrec <- data.matrix(gov_mobility_scale[sample(nrow(gov_mobility_scale), 10000), x_retrec])
+# 
+# # Step 2: Crunch SHAP values
+# shap_retrec <- shap.prep(fit_xgb_retrec, X_train = X_retrec)
+# 
+# # Step 3: SHAP importance
+# shap.plot.summary(shap_retrec) +
+#   theme_ipsum(base_family = "Futura Medium") +
+#   theme(legend.position = "bottom", panel.grid.minor = element_blank()) +
+#   ggtitle("Google Retail & Recreation Model")
+```
+
+```{r vaccination analysis}
+# final_df %>%
+#   dplyr::filter(month(date) == 10 & year(date) == 2021) %>%
+#   group_by(fips) %>%
+#   summarise(monthly_cases = sum(daily_cases), population = mean(population), vax = mean(Series_Complete_Pop_Pct)/100) %>%
+#   ungroup() %>%
+#   dplyr::mutate(monthly_cases_per_100k = monthly_cases/population*100000) %>%
+#   ggplot(aes(x=monthly_cases_per_100k, y=vax)) +
+#     geom_point(color = my_colors[2], alpha = .5) +
+#     theme_minimal() +
+#     geom_smooth(color = my_colors[3]) +
+#     labs(title = "Monthly Cases Per 100k by County in October 2021", x = "Monthly Cases Per 100k", y = "Mean % Fully Vaccinated") +
+#     scale_y_continuous(labels = scales::percent_format(accuracy = 1)) +
+#     scale_x_continuous(labels = scales::comma_format()) +
+#     theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+# 
+# vax_group <- final_df %>%
+#   select(fips, date, population, daily_cases, Series_Complete_Pop_Pct) %>%
+#   group_by(fips) %>%
+#   dplyr::mutate(Series_Complete_Pop_Pct = max(Series_Complete_Pop_Pct)) %>%
+#   ungroup() %>%
+#   mutate(vax_group = cut_number(Series_Complete_Pop_Pct, 8)) %>%
+#   group_by(date, vax_group) %>%
+#   summarise(daily_cases = sum(daily_cases, na.rm = T), population = sum(population, na.rm = T)) %>%
+#   ungroup() %>%
+#   dplyr::mutate(daily_cases_per_100k = daily_cases/population*100000, vax_group_ = vax_group) %>%
+#   arrange(vax_group, date) %>%
+#   group_by(vax_group) %>%
+#   dplyr::mutate(daily_cases_per_100k_roll_mean = roll_mean(daily_cases_per_100k, n=7, align="right", fill=0)) %>%
+#   ungroup() %>%
+#   dplyr::filter(year(date) == 2021)
+# 
+# vax_group %>%
+#   ggplot(aes(x=date, y=daily_cases_per_100k_roll_mean)) +
+#     geom_line(data=vax_group %>% dplyr::select(-vax_group), aes(group=vax_group_), color="lightgrey", size=0.5, alpha=0.5) +
+#     geom_line(aes(color=vax_group), color = my_colors[2], size=1.25) +
+#     theme_minimal() +
+#     theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), axis.title.x = element_blank()) +
+#     facet_wrap(~vax_group, ncol = 2) +
+#     ylab("7 Day Rolling Mean - Daily Cases Per 100k")
+```
+
+```{r political analysis}
+# #Republican
+# final_df %>%
+#   select(fips, date, daily_cases, population, REPUBLICAN) %>%
+#   group_by(fips) %>%
+#   dplyr::filter(year(date) == 2021) %>%
+#   dplyr::summarise(annual_cases = sum(daily_cases),
+#                    REPUBLICAN = mean(REPUBLICAN),
+#                    population = mean(population)) %>%
+#   ungroup() %>%
+#   mutate(cases_per_100k = annual_cases/population*100000) %>%
+#   dplyr::select(-fips, -annual_cases, -population) %>%
+#   reshape2::melt(id.vars = "cases_per_100k") %>%
+#   ggplot(aes(x=value, y=cases_per_100k)) +
+#   geom_point(color = plotly_colors[4], alpha = .5) +
+#   theme_minimal() +
+#   geom_smooth(method = "lm", color = plotly_colors[3]) +
+#   labs(title = "Republican Affiliation & Cases Per 100k in 2021", x = "Republican Affiliation by County", y = "Annual Cases Per 100k") +
+#   scale_y_continuous(labels = scales::comma_format())
+# 
+# #Democrat
+# final_df %>%
+#   select(fips, date, daily_cases, population, DEMOCRAT) %>%
+#   group_by(fips) %>%
+#   dplyr::filter(year(date) == 2021) %>%
+#   dplyr::summarise(annual_cases = sum(daily_cases),
+#                    DEMOCRAT = mean(DEMOCRAT),
+#                    population = mean(population)) %>%
+#   ungroup() %>%
+#   mutate(cases_per_100k = annual_cases/population*100000) %>%
+#   dplyr::select(-fips, -annual_cases, -population) %>%
+#   reshape2::melt(id.vars = "cases_per_100k") %>%
+#   ggplot(aes(x=value, y=cases_per_100k)) +
+#   geom_point(color = plotly_colors[1], alpha = .5) +
+#   theme_minimal() +
+#   geom_smooth(method = "lm", color = plotly_colors[3]) +
+#   labs(title = "Democrat Affiliation & Cases Per 100k in 2021", x = "Democrat Affiliation by County", y = "Annual Cases Per 100k") +
+#   scale_y_continuous(labels = scales::comma_format())
+```
