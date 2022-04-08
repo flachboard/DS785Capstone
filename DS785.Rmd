@@ -13,9 +13,9 @@ install.load::install_load("arrow", "bayestestR",
                            "factoextra", "FactoMineR", "farff", "flexdashboard", "forecast", "formattable",
                            "ggalluvial", "GGally", "ggcharts", "ggcorrplot", "ggExtra", "ggforce", "ggridges", "ggside", "ggstatsplot",
                            "ggtext", "grid", "gridExtra", "gt", "gtable", "gtsummary",
-                           "heatmaply", "hrbrthemes", "janitor", "latticeExtra", "lubridate", "maptools", "Metrics", "NbClust",
+                           "heatmaply", "hrbrthemes", "janitor", "latticeExtra", "lubridate", "maptools", "Metrics", "NbClust", "nortest",
                            "OpenML", "openxlsx", "outliers",
-                           "plotly", "poliscidata", "prophet", "psych", "randomForest", "ranger", "RcppRoll",
+                           "plotly", "poliscidata", "prophet", "psych", "randomForest", "ranger", "RcppRoll", "rstatix",
                            "see", "sf", "SHAPforxgboost", "shapper", "shapr", "shinydashboard", "skimr",
                            "tabnet", "tidycensus", "tidymodels", "tidyverse", "timetk", "tmap", "tmaptools",
                            "xgboost", "xlsx", "xts", "zipcodeR", "zoo")
@@ -820,30 +820,28 @@ annual_vars <- read_rds("../Data/annual_vars.rds")
 #Daily Cases Corr
 final_df %>%
   dplyr::filter(year(date) == 2021) %>%
-  dplyr::select(cases_7dayavg_per100k, deaths_7dayavg_per100k, all_of(daily_vars)) %>%
-  corrr::correlate() %>%
+  dplyr::select(cases_7dayavg_per100k, deaths_7dayavg_per100k, all_of(daily_vars), -contains(c("Administered", "Series"))) %>%
+  corrr::correlate(method = "spearman") %>%
   corrr::focus(cases_7dayavg_per100k) %>%
   dplyr::mutate(term = reorder(term, cases_7dayavg_per100k)) %>%
   ggplot(aes(term, cases_7dayavg_per100k)) +
     geom_col(fill = plotly_colors[1]) + coord_flip() +
-    #labs(title  ="Daily Variables: Correlation with Cases Per 100k (7 Day Avg)") +
-    scale_y_continuous(labels = scales::percent_format(accuracy = 1)) +
+    scale_y_continuous(name = "Spearman Correlation Coefficient", labels = scales::number_format(accuracy = .01)) +
     theme_ipsum(base_family = "Futura Medium") +
-    theme(axis.title.y = element_blank(), axis.title.x = element_blank(), panel.grid.minor = element_blank())
+    theme(axis.title.y = element_blank(), panel.grid.minor = element_blank())
 
 #Daily Deaths Corr
 final_df %>%
   dplyr::filter(year(date) == 2021) %>%
-  dplyr::select(cases_7dayavg_per100k, deaths_7dayavg_per100k, all_of(daily_vars)) %>%
-  corrr::correlate() %>%
+  dplyr::select(cases_7dayavg_per100k, deaths_7dayavg_per100k, all_of(daily_vars), -contains(c("Administered", "Series"))) %>%
+  corrr::correlate(method = "spearman") %>%
   corrr::focus(deaths_7dayavg_per100k) %>%
   dplyr::mutate(term = reorder(term, deaths_7dayavg_per100k)) %>%
   ggplot(aes(term, deaths_7dayavg_per100k)) +
     geom_col(fill = plotly_colors[2]) + coord_flip() +
-    #ggtitle("Daily Variables: Correlation with Deaths Per 100k (7 Day Avg)") +
-    scale_y_continuous(labels = scales::percent_format(accuracy = 1)) +
+    scale_y_continuous(name = "Spearman Correlation Coefficient", labels = scales::number_format(accuracy = .01)) +
     theme_ipsum(base_family = "Futura Medium") +
-    theme(axis.title.y = element_blank(), axis.title.x = element_blank(), panel.grid.minor = element_blank())
+    theme(axis.title.y = element_blank(), panel.grid.minor = element_blank())
 
 #Monthly Cases Corr
 final_df %>%
@@ -854,15 +852,14 @@ final_df %>%
   summarise_all(mean) %>%
   dplyr::ungroup() %>%
   dplyr::select(-fips, -yrmo, -population, -daily_cases, -daily_deaths) %>%
-  corrr::correlate() %>%
+  corrr::correlate(method = "spearman") %>%
   corrr::focus(monthly_cases_per100k) %>%
   dplyr::mutate(term = reorder(term, monthly_cases_per100k)) %>%
   ggplot(aes(term, monthly_cases_per100k)) +
     geom_col(fill = plotly_colors[1]) + coord_flip() +
-    #ggtitle("Monthly Variables: Correlation with Cases Per 100k") +
-    scale_y_continuous(labels = scales::percent_format(accuracy = 1)) +
+    scale_y_continuous(name = "Spearman Correlation Coefficient", labels = scales::number_format(accuracy = .01)) +
     theme_ipsum(base_family = "Futura Medium") +
-    theme(axis.title.y = element_blank(), axis.title.x = element_blank(), panel.grid.minor = element_blank()) +
+    theme(axis.title.y = element_blank(), panel.grid.minor = element_blank()) +
 
 #Monthly Deaths Corr
 final_df %>%
@@ -873,15 +870,14 @@ final_df %>%
   summarise_all(mean) %>%
   dplyr::ungroup() %>%
   dplyr::select(-fips, -yrmo, -population, -daily_cases, -daily_deaths) %>%
-  corrr::correlate() %>%
+  corrr::correlate(method = "spearman") %>%
   corrr::focus(monthly_deaths_per100k) %>%
   dplyr::mutate(term = reorder(term, monthly_deaths_per100k)) %>%
   ggplot(aes(term, monthly_deaths_per100k)) +
     geom_col(fill = plotly_colors[2]) + coord_flip() +
-    #ggtitle("Monthly Variables: Correlation with Deaths Per 100k") +
-    scale_y_continuous(labels = scales::percent_format(accuracy = 1)) +
+    scale_y_continuous(name = "Spearman Correlation Coefficient", labels = scales::number_format(accuracy = .01)) +
     theme_ipsum(base_family = "Futura Medium") +
-    theme(axis.title.y = element_blank(), axis.title.x = element_blank(), panel.grid.minor = element_blank())
+    theme(axis.title.y = element_blank(), panel.grid.minor = element_blank())
 
 #Annual Cases Corr
 annual_cases_corr <- final_df %>%
@@ -893,7 +889,7 @@ annual_cases_corr <- final_df %>%
   dplyr::mutate(annual_cases_per100k = daily_cases/population, annual_deaths_per100k = daily_deaths/population) %>%
   dplyr::ungroup() %>%
   dplyr::select(-fips, -daily_cases, -daily_deaths, -population) %>%
-  corrr::correlate() %>%
+  corrr::correlate(method = "spearman") %>%
   corrr::focus(annual_cases_per100k) %>%
   dplyr::mutate(term = reorder(term, annual_cases_per100k)) %>%
   drop_na()
@@ -906,10 +902,9 @@ bind_rows(
 ) %>%
 ggplot(aes(term, annual_cases_per100k)) +
   geom_col(fill = plotly_colors[1]) + coord_flip() +
-  #ggtitle("Annual Variables: Correlation with Cases Per 100k") +
-  scale_y_continuous(labels = scales::percent_format(accuracy = 1)) +
+  scale_y_continuous(name = "Spearman Correlation Coefficient", labels = scales::number_format(accuracy = .01)) +
   theme_ipsum(base_family = "Futura Medium") +
-  theme(axis.title.y = element_blank(), axis.title.x = element_blank(), panel.grid.minor = element_blank())
+  theme(axis.title.y = element_blank(), panel.grid.minor = element_blank())
 
 #Annual Deaths Corr
 annual_deaths_corr <- final_df %>%
@@ -921,7 +916,7 @@ annual_deaths_corr <- final_df %>%
   dplyr::mutate(annual_cases_per100k = daily_cases/population, annual_deaths_per100k = daily_deaths/population) %>%
   dplyr::ungroup() %>%
   dplyr::select(-fips, -daily_cases, -daily_deaths, -population) %>%
-  corrr::correlate() %>%
+  corrr::correlate(method = "spearman") %>%
   corrr::focus(annual_deaths_per100k) %>%
   dplyr::mutate(term = reorder(term, annual_deaths_per100k)) %>%
   drop_na()
@@ -934,40 +929,63 @@ bind_rows(
 ) %>%
 ggplot(aes(term, annual_deaths_per100k)) +
   geom_col(fill = plotly_colors[2]) + coord_flip() +
-  #ggtitle("Annual Variables: Correlation with Deaths Per 100k") +
-  scale_y_continuous(labels = scales::percent_format(accuracy = 1)) +
+  scale_y_continuous(name = "Spearman Correlation Coefficient", labels = scales::number_format(accuracy = .01)) +
   theme_ipsum(base_family = "Futura Medium") +
-  theme(axis.title.y = element_blank(), axis.title.x = element_blank(), panel.grid.minor = element_blank())
+  theme(axis.title.y = element_blank(), panel.grid.minor = element_blank())
 
 #Cases/Vax
-ggplotly(
-  final_df %>%
-    dplyr::filter(year(date) == 2021) %>%
-    dplyr::select(cases_7dayavg_per100k, deaths_7dayavg_per100k, all_of(vax_vars)) %>%
-    corrr::correlate() %>%
-    corrr::focus(cases_7dayavg_per100k) %>%
-    dplyr::mutate(term = reorder(term, cases_7dayavg_per100k)) %>%
-    ggplot(aes(term, cases_7dayavg_per100k)) +
-      geom_col(fill = plotly_colors[1]) + coord_flip() +
-      theme_minimal() +
-      theme(axis.title.y = element_blank(), axis.title.x = element_blank(), panel.grid.minor = element_blank()) +
-      ggtitle("Cases Per 100k (7 Day Avg) & Vax/Deaths Correlation")
-)
+cases_vax <- final_df %>%
+  select(fips, date, population, daily_cases, Series_Complete_Pop_Pct) %>%
+  group_by(fips) %>%
+  dplyr::mutate(Series_Complete_Pop_Pct = max(Series_Complete_Pop_Pct)) %>%
+  ungroup() %>%
+  mutate(vax_group = cut_number(Series_Complete_Pop_Pct, 4)) %>%
+  group_by(date, vax_group) %>%
+  summarise(daily_cases = sum(daily_cases, na.rm = T), population = sum(population, na.rm = T)) %>%
+  ungroup() %>%
+  dplyr::mutate(daily_cases_per_100k = daily_cases/population*100000, vax_group_ = vax_group) %>%
+  arrange(vax_group, date) %>%
+  group_by(vax_group) %>%
+  dplyr::mutate(daily_cases_per_100k_roll_mean = roll_mean(daily_cases_per_100k, n=7, align="right", fill=0)) %>%
+  ungroup() %>%
+  dplyr::filter(year(date) == 2021)
+
+cases_vax %>%
+  ggplot(aes(x=date, y=daily_cases_per_100k_roll_mean)) +
+    geom_line(data=cases_vax %>% dplyr::select(-vax_group), aes(group=vax_group_), color="lightgrey", size=0.5, alpha=0.5) +
+    geom_line(aes(color=vax_group), color = plotly_colors[1], size=1.25) +
+    theme_minimal() +
+    theme_ipsum(base_family = "Futura Medium") +
+    theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), axis.title.x = element_blank()) +
+    facet_wrap(~vax_group, ncol = 2) +
+    ylab("Cases Per 100k")
 
 #Deaths/Vax
-ggplotly(
-  final_df %>%
-    dplyr::filter(year(date) == 2021) %>%
-    dplyr::select(cases_7dayavg_per100k, deaths_7dayavg_per100k, all_of(vax_vars)) %>%
-    corrr::correlate() %>%
-    corrr::focus(deaths_7dayavg_per100k) %>%
-    dplyr::mutate(term = reorder(term, deaths_7dayavg_per100k)) %>%
-    ggplot(aes(term, deaths_7dayavg_per100k)) +
-      geom_col(fill = plotly_colors[2]) + coord_flip() +
-      theme_minimal() +
-      theme(axis.title.y = element_blank(), axis.title.x = element_blank(), panel.grid.minor = element_blank()) +
-      ggtitle("Deaths Per 100k (7 Day Avg) & Vax/Cases Correlation")
-)
+deaths_vax <- final_df %>%
+  select(fips, date, population, daily_deaths, Series_Complete_Pop_Pct) %>%
+  group_by(fips) %>%
+  dplyr::mutate(Series_Complete_Pop_Pct = max(Series_Complete_Pop_Pct)) %>%
+  ungroup() %>%
+  mutate(vax_group = cut_number(Series_Complete_Pop_Pct, 4)) %>%
+  group_by(date, vax_group) %>%
+  summarise(daily_deaths = sum(daily_deaths, na.rm = T), population = sum(population, na.rm = T)) %>%
+  ungroup() %>%
+  dplyr::mutate(daily_deaths_per_100k = daily_deaths/population*100000, vax_group_ = vax_group) %>%
+  arrange(vax_group, date) %>%
+  group_by(vax_group) %>%
+  dplyr::mutate(daily_deaths_per_100k_roll_mean = roll_mean(daily_deaths_per_100k, n=7, align="right", fill=0)) %>%
+  ungroup() %>%
+  dplyr::filter(year(date) == 2021)
+
+deaths_vax %>%
+  ggplot(aes(x=date, y=daily_deaths_per_100k_roll_mean)) +
+    geom_line(data=deaths_vax %>% dplyr::select(-vax_group), aes(group=vax_group_), color="lightgrey", size=0.5, alpha=0.5) +
+    geom_line(aes(color=vax_group), color = plotly_colors[2], size=1.25) +
+    theme_minimal() +
+    theme_ipsum(base_family = "Futura Medium") +
+    theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), axis.title.x = element_blank()) +
+    facet_wrap(~vax_group, ncol = 2) +
+    ylab("Deaths Per 100k")
 
 #Mental Health
 mh_corr <- final_df %>%
@@ -993,7 +1011,7 @@ bind_rows(
 ggplot(aes(term, average_number_of_mentally_unhealthy_days)) +
   geom_col(fill = plotly_colors[3]) + coord_flip() +
   #ggtitle("Correlation with Mental Health") +
-  scale_y_continuous(labels = scales::percent_format(accuracy = 1)) +
+  scale_y_continuous(labels = scales::number_format(accuracy = .01)) +
   theme_ipsum(base_family = "Futura Medium") +
   theme(axis.title.y = element_blank(), axis.title.x = element_blank(), panel.grid.minor = element_blank())
 
@@ -1021,7 +1039,7 @@ bind_rows(
 ggplot(aes(term, average_number_of_physically_unhealthy_days)) +
   geom_col(fill = plotly_colors[3]) + coord_flip() +
   #ggtitle("Correlation with Physical Health") +
-  scale_y_continuous(labels = scales::percent_format(accuracy = 1)) +
+  scale_y_continuous(labels = scales::number_format(accuracy = .01)) +
   theme_ipsum(base_family = "Futura Medium") +
   theme(axis.title.y = element_blank(), axis.title.x = element_blank(), panel.grid.minor = element_blank())
 
@@ -1264,7 +1282,7 @@ watchlist <- list(train=dtrain, test=dvalid)
 # )
 # 
 # #Final Model
-# fit_xgb_cases_watch <- xgboost(params, data = dtrain, nrounds = 19, verbose = 0)
+# fit_xgb_cases_watch <- xgboost(params = params, data = dtrain, nrounds = 19, verbose = 0)
 # 
 # #Save Model
 # saveRDS(fit_xgb_cases_watch, "../Model/fit_xgb_cases_watch.rds")
@@ -1273,8 +1291,8 @@ watchlist <- list(train=dtrain, test=dvalid)
 fit_xgb_cases_watch <- readRDS("../Model/fit_xgb_cases_watch.rds")
 
 #Predict
-train_pred <- predict(fit_xgb_cases_watch, train_x)
-test_pred <- predict(fit_xgb_cases_watch, test_x)
+train_pred <- stats::predict(fit_xgb_cases_watch, train_x)
+test_pred <- stats::predict(fit_xgb_cases_watch, test_x)
 
 #Empty dataframe
 fit_cases <- setNames(data.frame(matrix(nrow = 0, ncol = 3)), c("Metric", "Train", "Test"))
@@ -1301,7 +1319,8 @@ gt(fit_cases) %>%
 #Variable Importance
 xgb.importance(colnames(dtrain), model = fit_xgb_cases_watch) %>%
   slice_max(order_by = Gain, n=25) %>%
-  ggplot(aes(y = reorder(Feature,Gain),Gain)) +
+  dplyr::rename(Importance = Gain) %>%
+  ggplot(aes(y = reorder(Feature, Importance), Importance)) +
   geom_bar(stat="identity", fill = plotly_colors[1]) +
   theme_ipsum(base_family = "Futura Medium") +
   ylab("") +
@@ -1328,6 +1347,21 @@ data.frame(date = train_test$date,
   #ggtitle("National COVID-19 Cases: Actual vs Prediction") +
   theme(legend.title = element_blank(), panel.grid.minor = element_blank()) +
   scale_color_manual(values=c(plotly_colors[1], plotly_colors[8]))
+
+#Plot Train/Test RMSE
+fread("../Model/cases_model_training_rmse.csv") %>%
+  melt() %>%
+  group_by(variable) %>%
+  dplyr::mutate(Iteration = row_number()) %>%
+  ungroup() %>%
+  ggplot(aes(x=Iteration, y=value, group=variable, color=variable)) +
+  geom_line() +
+  theme_ipsum(base_family = "Futura Medium") +
+  ylab("RMSE") +
+  xlab("Iteration") +
+  theme(legend.title = element_blank(), panel.grid.minor = element_blank()) +
+  scale_color_manual(values=c(plotly_colors[1], plotly_colors[8])) +
+  geom_vline(xintercept = 19, linetype = 'dashed', color = plotly_colors[9])
 
 #Clean Up
 gc()
@@ -1405,9 +1439,9 @@ gc()
 ```{r xgboost watch model deaths}
 set.seed(84)
 
-# #Watchlist (Prevent Overfitting)
-# watchlist <- list(train=dtrain_deaths, test=dvalid_deaths)
-# 
+#Watchlist (Prevent Overfitting)
+watchlist <- list(train=dtrain_deaths, test=dvalid_deaths)
+
 # #Train Model
 # fit_xgb_deaths_watch <- xgb.train(
 #   params,
@@ -1419,7 +1453,7 @@ set.seed(84)
 # )
 # 
 # #Final Model
-# fit_xgb_deaths_watch <- xgboost(params, data = dtrain_deaths, nrounds = 16, verbose = 0)
+# fit_xgb_deaths_watch <- xgboost(params = params, data = dtrain_deaths, nrounds = 16, verbose = 0)
 # 
 # #Save Model
 # saveRDS(fit_xgb_deaths_watch, "../Model/fit_xgb_deaths_watch.rds")
@@ -1456,7 +1490,8 @@ gt(fit_deaths) %>%
 #Variable Importance
 xgb.importance(colnames(dtrain), model = fit_xgb_deaths_watch) %>%
   slice_max(order_by = Gain, n=25) %>%
-  ggplot(aes(y = reorder(Feature,Gain),Gain)) +
+  dplyr::rename(Importance = Gain) %>%
+  ggplot(aes(y = reorder(Feature, Importance), Importance)) +
   geom_bar(stat="identity", fill = plotly_colors[2]) +
   theme_ipsum(base_family = "Futura Medium") +
   ylab("") +
@@ -1504,13 +1539,15 @@ shap.plot.summary(shap)
 
 ```{r EIX}
 #Cases Interactions
+cases_pairs <- interactions(fit_xgb_cases_watch, dtrain, option = "pairs")
 cases_interactions <- interactions(fit_xgb_cases_watch, dtrain, option = "interactions")
-head(cases_interactions)
+cp_df <- data.frame(cases_pairs)
 ci_df <- data.frame(cases_interactions)
 
 #Deaths Interactions
+deaths_pairs <- interactions(fit_xgb_deaths_watch, dtrain_deaths, option = "pairs")
 deaths_interactions <- interactions(fit_xgb_deaths_watch, dtrain_deaths, option = "interactions")
-head(deaths_interactions)
+dp_df <- data.frame(deaths_pairs)
 di_df <- data.frame(deaths_interactions)
 
 #Table Interactions for Cases
@@ -1538,7 +1575,7 @@ final_df %>%
     ysidehistogram.args = list(fill = plotly_colors[8], color = plotly_colors[1]),
     smooth.line.args = list(color = plotly_colors[8], method = "lm"),
     ggtheme = theme_ipsum(base_family = "Futura Medium")
-) +
+  ) +
   scale_ysidex_continuous(labels = NULL, minor_breaks = NULL) +
   scale_xsidey_continuous(labels = NULL, minor_breaks = NULL) +
   scale_y_continuous(labels = scales::number_format(accuracy = 1, big.mark = ",")) +
@@ -1557,6 +1594,7 @@ final_df %>%
     y     = annual_deaths_per100k,
     xlab  = "Avg # of Mentally Unhealthy Days",
     ylab  = "Annual Deaths Per 100k",
+    type = "parametric",
     #title = "COVID-19 Deaths and Mental Health",
     point.args = list(color = plotly_colors[2]),
     xsidehistogram.args = list(fill = plotly_colors[8], color = plotly_colors[2]),
@@ -1590,7 +1628,8 @@ ggplot(data=mh_df, aes(x=date, y=cases_7dayavg_per100k)) +
   theme(
     legend.position="none",
     plot.title = element_text(size=14),
-    panel.grid.minor = element_blank()
+    panel.grid.minor = element_blank(),
+    panel.grid.major = element_blank()
   ) +
   #ggtitle("COVID-19 Cases by Mental Health Quartiles") +
   ylab("Cases Per 100k (7 Day Avg)") +
@@ -1619,7 +1658,8 @@ ggplot(data=mh_deaths_df, aes(x=date, y=deaths_7dayavg_per100k)) +
   theme(
     legend.position="none",
     plot.title = element_text(size=14),
-    panel.grid.minor = element_blank()
+    panel.grid.minor = element_blank(),
+    panel.grid.major = element_blank()
   ) +
   #ggtitle("COVID-19 Deaths by Mental Health Quartiles") +
   ylab("Deaths Per 100k (7 Day Avg)") +
@@ -1650,7 +1690,8 @@ final_df %>%
 ) +
   scale_ysidex_continuous(labels = NULL, minor_breaks = NULL) +
   scale_xsidey_continuous(labels = NULL, minor_breaks = NULL) +
-  scale_y_continuous(labels = scales::number_format(accuracy = 1, big.mark = ","))
+  scale_y_continuous(labels = scales::number_format(accuracy = 1, big.mark = ",")) +
+  theme(panel.grid.minor = element_blank())
 
 #Deaths - ggscatterstats
 final_df %>%
@@ -1673,7 +1714,8 @@ final_df %>%
     ggtheme = theme_ipsum(base_family = "Futura Medium")
 ) +
   scale_ysidex_continuous(labels = NULL, minor_breaks = NULL) +
-  scale_xsidey_continuous(labels = NULL, minor_breaks = NULL)
+  scale_xsidey_continuous(labels = NULL, minor_breaks = NULL) +
+  theme(panel.grid.minor = element_blank())
 
 #Physical / Mental Health - ggscatterstats
 final_df %>%
@@ -1719,7 +1761,8 @@ ggplot(data=ph_cases_df, aes(x=date, y=cases_7dayavg_per100k)) +
   theme(
     legend.position="none",
     plot.title = element_text(size=14),
-    panel.grid.minor = element_blank()
+    panel.grid.minor = element_blank(),
+    panel.grid.major = element_blank()
   ) +
   #ggtitle("COVID-19 Cases by Physical Health Quartiles") +
   ylab("Cases Per 100k (7 Day Avg)") +
@@ -1748,7 +1791,8 @@ ggplot(data=ph_deaths_df, aes(x=date, y=deaths_7dayavg_per100k)) +
   theme(
     legend.position="none",
     plot.title = element_text(size=14),
-    panel.grid.minor = element_blank()
+    panel.grid.minor = element_blank(),
+    panel.grid.major = element_blank()
   ) +
   #ggtitle("COVID-19 Deaths by Physical Health Quartiles") +
   ylab("Deaths Per 100k (7 Day Avg)") +
@@ -1770,6 +1814,9 @@ mental_physical_health_df <- final_df %>%
                    Poverty = mean(Poverty),
                    ChildPoverty = mean(ChildPoverty),
                    percent_children_in_poverty = mean(percent_children_in_poverty),
+                   percent_completed_high_school = mean(percent_completed_high_school),
+                   hs_or_more = mean(hs_or_more),
+                   percent_some_college = mean(percent_some_college),
                    median_household_income = mean(median_household_income),
                    Income = mean(Income),
                    IncomePerCap = mean(IncomePerCap)) %>%
@@ -1831,7 +1878,7 @@ mental_physical_health_df %>%
 #Create dataframe
 adi_sdoh_economic <- final_df %>%
   dplyr::filter(year(date) == 2021) %>%
-  select(fips, daily_deaths, contains("pct_m"), DEMOCRAT, OTHER, REPUBLICAN, GREEN, LIBERTARIAN, contains("income"), population, density) %>%
+  select(fips, daily_deaths, DEMOCRAT, OTHER, REPUBLICAN, GREEN, LIBERTARIAN, hr_conserv11, hr_liberal11, contains("income"), population, density) %>%
   group_by(fips) %>%
   summarise(total_deaths = sum(daily_deaths),
             REPUBLICAN = mean(REPUBLICAN),
@@ -1839,12 +1886,8 @@ adi_sdoh_economic <- final_df %>%
             OTHER = mean(OTHER),
             GREEN = mean(GREEN),
             DEMOCRAT = mean(DEMOCRAT),
-            conpct_m = mean(conpct_m),
-            modpct_m = mean(modpct_m),
-            libpct_m = mean(libpct_m),
-            reppct_m = mean(reppct_m),
-            indpct_m = mean(indpct_m),
-            dempct_m = mean(dempct_m),
+            hr_conserv11 = mean(hr_conserv11),
+            hr_liberal11 = mean(hr_liberal11),
             Income = mean(Income),
             IncomePerCap = mean(IncomePerCap),
             income_ratio = mean(income_ratio),
@@ -1876,7 +1919,7 @@ ggbetweenstats(
   data    = adi_sdoh_economic,
   x       = cluster,
   y       = deaths_per_100k,
-  title   = "Political Affiliation & Income Clusters",
+  #title   = "Political Affiliation & Income Clusters",
   caption = "",
   ggtheme = theme_ipsum(base_family = "Futura Medium"),
   centrality.point.args = list(color = plotly_colors[8], size = 4),
@@ -1980,16 +2023,14 @@ ggplot(data = adi_sdoh_education, mapping = aes(x = long, y = lat, group = group
 adi_sdoh_health_care <- final_df %>%
   dplyr::filter(year(date) == 2021) %>%
   group_by(fips) %>%
-  dplyr::summarise(total_cases = sum(daily_cases),
-                   total_deaths = sum(daily_deaths),
+  dplyr::summarise(total_deaths = sum(daily_deaths),
                    population = mean(population),
                    density = mean(density),
                    teen_birth_per1k = mean(teen_birth_per1k),
                    percent_low_birthweight = mean(percent_low_birthweight)) %>%
   ungroup() %>%
-  dplyr::mutate(deaths_per_100k = round(total_deaths/population*100000),
-                cases_per_100k = round(total_cases/population*100000)) %>%
-  select(-fips, -total_deaths, -total_cases)
+  dplyr::mutate(deaths_per_100k = round(total_deaths/population*100000)) %>%
+  select(-fips, -total_deaths)
 
 #Normalize
 z_hc <- adi_sdoh_health_care
@@ -2002,7 +2043,7 @@ fviz_nbclust(nor_hc, kmeans, method = "silhouette", linecolor = plotly_colors[3]
   theme(text = element_text(family = "Futura Medium"))
 
 #Cluster
-adi_sdoh_health_care_cluster <- kmeans(nor_hc, centers = 4)
+adi_sdoh_health_care_cluster <- kmeans(nor_hc, centers = 3)
 adi_sdoh_health_care <- adi_sdoh_health_care %>%
   add_column(cluster = adi_sdoh_health_care_cluster$cluster)
 
@@ -2011,19 +2052,6 @@ ggbetweenstats(
   data    = adi_sdoh_health_care,
   x       = cluster,
   y       = deaths_per_100k,
-  #title   = "ADI/SDoH Health Care Clusters",
-  caption = "",
-  ggtheme = theme_ipsum(base_family = "Futura Medium"),
-  centrality.point.args = list(color = plotly_colors[8], size = 4),
-  palette = "Accent"
-) +
-  scale_y_continuous(labels = scales::number_format(big.mark = ",")) +
-  theme(panel.grid.minor = element_blank())
-
-ggbetweenstats(
-  data    = adi_sdoh_health_care,
-  x       = cluster,
-  y       = cases_per_100k,
   #title   = "ADI/SDoH Health Care Clusters",
   caption = "",
   ggtheme = theme_ipsum(base_family = "Futura Medium"),
@@ -2167,18 +2195,15 @@ final_df %>%
 adi_sdoh_social <- final_df %>%
   dplyr::filter(year(date) == 2021) %>%
   dplyr::group_by(fips) %>%
-  dplyr::summarise(total_cases = sum(daily_cases),
-                   total_deaths = sum(daily_deaths),
+  dplyr::summarise(                   total_deaths = sum(daily_deaths),
+                   adi = mean(adi),
                    population = mean(population),
                    food_environment_index = mean(food_environment_index),
                    percent_food_insecure = mean(percent_food_insecure),
-                   percent_limited_access_to_healthy_foods = mean(percent_limited_access_to_healthy_foods),
-                   temperature = mean(temperature),
-                   precipitation = mean(precipitation)) %>%
+                   percent_limited_access_to_healthy_foods = mean(percent_limited_access_to_healthy_foods)) %>%
   ungroup() %>%
-  dplyr::mutate(deaths_per_100k = round(total_deaths/population*100000),
-                cases_per_100k = round(total_cases/population*100000)) %>%
-  select(-fips, -total_deaths, -total_cases)
+  dplyr::mutate(deaths_per_100k = round(total_deaths/population*100000)) %>%
+  select(-fips, -total_deaths, -population)
 
 #Normalize
 z_social <- adi_sdoh_social
@@ -2200,20 +2225,7 @@ ggbetweenstats(
   data    = adi_sdoh_social,
   x       = cluster,
   y       = deaths_per_100k,
-  title   = "ADI/SDoH Social Clusters",
-  caption = "",
-  ggtheme = theme_ipsum(base_family = "Futura Medium"),
-  centrality.point.args = list(color = plotly_colors[8], size = 4),
-  palette = "Accent"
-) +
-  scale_y_continuous(labels = scales::number_format(big.mark = ",")) +
-  theme(panel.grid.minor = element_blank())
-
-ggbetweenstats(
-  data    = adi_sdoh_social,
-  x       = cluster,
-  y       = cases_per_100k,
-  title   = "ADI/SDoH Social Clusters",
+  #title   = "ADI/SDoH Social Clusters",
   caption = "",
   ggtheme = theme_ipsum(base_family = "Futura Medium"),
   centrality.point.args = list(color = plotly_colors[8], size = 4),
@@ -2397,7 +2409,8 @@ stringency_scatterstats_jan <- ggscatterstats(
     xlab  = "Stringency Index",
     ylab  = "Monthly Change in COVID-19 Cases",
     title = "January 2021",
-    point.args = list(color = plotly_colors[1]),
+    type = "nonparametric",
+    point.args = list(color = plotly_colors[1], alpha = .4),
     xsidehistogram.args = list(fill = plotly_colors[8], color = plotly_colors[1]),
     ysidehistogram.args = list(fill = plotly_colors[8], color = plotly_colors[1]),
     smooth.line.args = list(color = plotly_colors[8], method = "lm"),
@@ -2416,7 +2429,8 @@ stringency_scatterstats_dec <- ggscatterstats(
     xlab  = "Stringency Index",
     ylab  = "Monthly Change in COVID-19 Cases",
     title = "December 2021",
-    point.args = list(color = plotly_colors[1]),
+    type = "nonparametric",
+    point.args = list(color = plotly_colors[1], alpha = .4),
     xsidehistogram.args = list(fill = plotly_colors[8], color = plotly_colors[1]),
     ysidehistogram.args = list(fill = plotly_colors[8], color = plotly_colors[1]),
     smooth.line.args = list(color = plotly_colors[8], method = "lm"),
@@ -2536,7 +2550,9 @@ ggbetweenstats(
   theme_ipsum(base_family = "Futura Medium") +
   ggtitle("July") +
   theme(legend.position = "none") +
-  scale_y_continuous(label = scales::percent_format()) +
+  scale_y_continuous(label = scales::percent_format())
+  
+  +
     
 ggbetweenstats(
   data = school_closing_cases %>%
@@ -2546,7 +2562,10 @@ ggbetweenstats(
 ) +
   theme_ipsum(base_family = "Futura Medium") +
   ggtitle("August") +
-  theme(legend.position = "none") +
+  theme(legend.position = "none")
+    
++
+  
 ggbetweenstats(
   data = school_closing_cases %>%
     dplyr::filter(month == "Sep" & isnt_outlier == T),
@@ -2556,7 +2575,9 @@ ggbetweenstats(
   theme_ipsum(base_family = "Futura Medium") +
   ggtitle("September") +
   theme(legend.position = "none")
+
 ) / (
+  
 ggbetweenstats(
   data = school_closing_cases %>%
     dplyr::filter(month == "Oct" & isnt_outlier == T),
@@ -2565,7 +2586,10 @@ ggbetweenstats(
 ) +
   theme_ipsum(base_family = "Futura Medium") +
   ggtitle("October") +
-  theme(legend.position = "none") +
+  theme(legend.position = "none")
+
++
+  
 ggbetweenstats(
   data = school_closing_cases %>%
     dplyr::filter(month == "Nov" & isnt_outlier == T),
@@ -2574,7 +2598,10 @@ ggbetweenstats(
 ) +
   theme_ipsum(base_family = "Futura Medium") +
   ggtitle("November") +
-  theme(legend.position = "none") +
+  theme(legend.position = "none")
+
++
+  
 ggbetweenstats(
   data = school_closing_cases %>%
     dplyr::filter(month == "Dec" & isnt_outlier == T),
@@ -3537,31 +3564,6 @@ invisible(gc())
 #     scale_y_continuous(labels = scales::percent_format(accuracy = 1)) +
 #     scale_x_continuous(labels = scales::comma_format()) +
 #     theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
-# 
-# vax_group <- final_df %>%
-#   select(fips, date, population, daily_cases, Series_Complete_Pop_Pct) %>%
-#   group_by(fips) %>%
-#   dplyr::mutate(Series_Complete_Pop_Pct = max(Series_Complete_Pop_Pct)) %>%
-#   ungroup() %>%
-#   mutate(vax_group = cut_number(Series_Complete_Pop_Pct, 8)) %>%
-#   group_by(date, vax_group) %>%
-#   summarise(daily_cases = sum(daily_cases, na.rm = T), population = sum(population, na.rm = T)) %>%
-#   ungroup() %>%
-#   dplyr::mutate(daily_cases_per_100k = daily_cases/population*100000, vax_group_ = vax_group) %>%
-#   arrange(vax_group, date) %>%
-#   group_by(vax_group) %>%
-#   dplyr::mutate(daily_cases_per_100k_roll_mean = roll_mean(daily_cases_per_100k, n=7, align="right", fill=0)) %>%
-#   ungroup() %>%
-#   dplyr::filter(year(date) == 2021)
-# 
-# vax_group %>%
-#   ggplot(aes(x=date, y=daily_cases_per_100k_roll_mean)) +
-#     geom_line(data=vax_group %>% dplyr::select(-vax_group), aes(group=vax_group_), color="lightgrey", size=0.5, alpha=0.5) +
-#     geom_line(aes(color=vax_group), color = my_colors[2], size=1.25) +
-#     theme_minimal() +
-#     theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), axis.title.x = element_blank()) +
-#     facet_wrap(~vax_group, ncol = 2) +
-#     ylab("7 Day Rolling Mean - Daily Cases Per 100k")
 ```
 
 ```{r political analysis}
