@@ -2030,7 +2030,7 @@ adi_sdoh_health_care <- final_df %>%
                    percent_low_birthweight = mean(percent_low_birthweight)) %>%
   ungroup() %>%
   dplyr::mutate(deaths_per_100k = round(total_deaths/population*100000)) %>%
-  select(-fips, -total_deaths)
+  select(-fips, -total_deaths, -population, -density)
 
 #Normalize
 z_hc <- adi_sdoh_health_care
@@ -2043,7 +2043,7 @@ fviz_nbclust(nor_hc, kmeans, method = "silhouette", linecolor = plotly_colors[3]
   theme(text = element_text(family = "Futura Medium"))
 
 #Cluster
-adi_sdoh_health_care_cluster <- kmeans(nor_hc, centers = 3)
+adi_sdoh_health_care_cluster <- kmeans(nor_hc, centers = 2)
 adi_sdoh_health_care <- adi_sdoh_health_care %>%
   add_column(cluster = adi_sdoh_health_care_cluster$cluster)
 
